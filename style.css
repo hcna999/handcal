@@ -27,7 +27,7 @@ html, body {
 }
 
 body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-input { -webkit-user-select: text; user-select: text; font: inherit; }
+input, textarea { -webkit-user-select: text; user-select: text; font: inherit; }
 .hidden { display: none !important; }
 
 /* ---------- top bar */
@@ -206,3 +206,14 @@ canvas { display: block; touch-action: none; }
   max-width: calc(100vw - 32px);
   z-index: 10;
 }
+
+/* ---------- 필기 → 글자 */
+#ocr-panel { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ocr-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.muted-text { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+#ocr-summary { font-size: 14px; line-height: 1.5; }
+#ocr-summary h3 { font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
+#ocr-summary p { margin: 0; }
+#ocr-summary ul { margin: 0; padding-left: 18px; }
+.ocr-label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+#ocr-text { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 14px; line-height: 1.5; resize: vertical; background: #fff; }

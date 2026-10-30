@@ -242,6 +242,7 @@ const normalize = (n) => ({
   strokes: Array.isArray(n?.strokes) ? n.strokes : [],
   updated: n?.updated || 0,
   remoteTime: n?.remoteTime,
+  ocr: n?.ocr,
 });
 
 const notes = {
@@ -326,7 +327,7 @@ const notes = {
         const local = await idb.get('note:' + d);
         const r = this.remote.get(d);
         if (local?.strokes?.length) {
-          const payload = { v: 1, date: d, height: local.height, strokes: local.strokes, updated: local.updated };
+          const payload = { v: 1, date: d, height: local.height, strokes: local.strokes, updated: local.updated, ocr: local.ocr };
           const f = r ? await drive.update(r.id, payload) : await drive.create(d + '.json', payload);
           this.remote.set(d, f);
           const cur = await idb.get('note:' + d);
@@ -698,7 +699,7 @@ function drawStroke(ctx, s, live = false) {
   ctx.lineJoin = 'round';
   ctx.strokeStyle = ctx.fillStyle = s.color;
   if (s.tool === 'hl') {
-    const q = smoothPoints(p, 0.5);
+    const q = smoothPoints(uniquePoints(p), 0.5);
     ctx.globalAlpha = 0.35;
     ctx.lineWidth = s.size;
     ctx.beginPath();
@@ -742,8 +743,19 @@ function penPath(s, live) {
 }
 
 // 압력값 보정: 애플 펜슬은 가볍게 쓰면 0.05~0.2 정도라 너무 가늘어지므로 범위를 넓힘
+// 예전 버전에 중복 저장된 좌표(같은 구간이 반복됨) 제거
+function uniquePoints(points) {
+  const seen = new Set();
+  return points.filter((q) => {
+    const k = q[0] + ',' + q[1];
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 function inkPoints(s) {
-  const p = s.points;
+  const p = uniquePoints(s.points);
   const isPen = s.pen ?? !p.every((q) => q[2] === 0.5);
   if (!isPen) return p.map((q) => [q[0], q[1], 0.5]);
   const pr = p.map((q) => q[2]);
@@ -907,8 +919,11 @@ function onPointerMove(e) {
     if (pad.tool === 'eraser' && e.pointerType !== 'touch') { pad.hover = makePoint(e); requestOverlay(); }
     return;
   }
+  // 아이패드 사파리는 이미 받은 이동 이벤트를 다시 보내는 경우가 있어 시간순으로 새것만 사용
   const list = e.getCoalescedEvents?.() || [];
   for (const ev of list.length ? list : [e]) {
+    if (ev.timeStamp <= (pad.active.lastTime ?? -1)) continue;
+    pad.active.lastTime = ev.timeStamp;
     const pt = makePoint(ev);
     if (pad.active.erase) eraseAt(pt[0], pt[1]);
     else {
@@ -1027,6 +1042,7 @@ async function openDay(ds, { push = true } = {}) {
   $('#ev-title').value = '';
 
   pad.note = blankNote();
+  renderOcr();
   pad.undo = [];
   pad.redo = [];
   pad.active = null;
@@ -1043,6 +1059,7 @@ async function openDay(ds, { push = true } = {}) {
     const note = await notes.get(ds);
     if (token !== dayToken) return;
     pad.note = note;
+    renderOcr();
     layoutPad();
   } catch (e) {
     handleErr(e);
@@ -1134,6 +1151,89 @@ async function onAddEvent(ev) {
     renderDayEvents();
   } catch (e) { handleErr(e); }
   finally { btn.disabled = false; }
+}
+
+// ---------- 필기 → 글자 (중계 서버의 Gemini 사용)
+function noteImage() {
+  const strokes = pad.note.strokes;
+  if (!strokes.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of strokes) {
+    for (const p of s.points) {
+      x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]);
+      x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]);
+    }
+  }
+  const m = 30;
+  x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(PAGE_W, x1 + m); y1 += m;
+  const w = x1 - x0, h = y1 - y0;
+  let k = Math.min(2, 1600 / w);
+  if (h * k > 8000) k = 8000 / h;
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * k));
+  c.height = Math.max(1, Math.round(h * k));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.setTransform(k, 0, 0, k, -x0 * k, -y0 * k);
+  for (const s of strokes) drawStroke(ctx, s);
+  return c.toDataURL('image/png').split(',')[1];
+}
+
+function renderOcr() {
+  const o = pad.note.ocr;
+  $('#ocr-btn').textContent = o ? '다시 변환' : '글자로 변환';
+  $('#ocr-copy').classList.toggle('hidden', !o);
+  $('#ocr-result').classList.toggle('hidden', !o);
+  $('#ocr-hint').classList.toggle('hidden', !!o);
+  if (!CFG.WORKER_URL) $('#ocr-hint').textContent = '중계 서버(WORKER_URL)를 연결하면 쓸 수 있어요.';
+  if (!o) return;
+  const box = $('#ocr-summary');
+  const parts = [];
+  if (o.summary) { parts.push(el('h3', null, '요약'), el('p', null, o.summary)); }
+  for (const [title, items] of [['할 일', o.todos], ['결정 사항', o.decisions]]) {
+    if (!items?.length) continue;
+    const ul = el('ul');
+    for (const t of items) ul.append(el('li', null, t));
+    parts.push(el('h3', null, title), ul);
+  }
+  box.replaceChildren(...parts);
+  $('#ocr-text').value = o.text || '';
+}
+
+async function runOcr() {
+  if (!CFG.WORKER_URL) return toast('중계 서버를 먼저 연결해야 해요');
+  if (!auth.connected()) return toast('먼저 구글 로그인을 해주세요');
+  const image = noteImage();
+  if (!image) return toast('변환할 필기가 없어요');
+  const date = state.date, btn = $('#ocr-btn');
+  btn.disabled = true;
+  btn.textContent = '변환 중…';
+  try {
+    const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/ocr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image, date }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
+    if (state.date !== date) return;
+    pad.note.ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now() };
+    saveSoon();
+  } catch (e) {
+    handleErr(e);
+  } finally {
+    btn.disabled = false;
+    if (state.date === date) renderOcr();
+  }
+}
+
+function ocrAsText(o) {
+  const lines = [o.text || ''];
+  if (o.summary) lines.push('', '[요약]', o.summary);
+  if (o.todos?.length) lines.push('', '[할 일]', ...o.todos.map((t) => '☐ ' + t));
+  if (o.decisions?.length) lines.push('', '[결정 사항]', ...o.decisions.map((t) => '• ' + t));
+  return lines.join('\n').trim();
 }
 
 // ---------- 동기화 상태 / 알림
@@ -1335,6 +1435,18 @@ function bind() {
     saveSoon();
   };
 
+  // 필기 → 글자
+  $('#ocr-btn').onclick = runOcr;
+  $('#ocr-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(ocrAsText(pad.note.ocr)); toast('복사했어요'); }
+    catch { toast('복사하지 못했어요'); }
+  };
+  $('#ocr-text').addEventListener('input', (e) => {
+    if (!pad.note.ocr) return;
+    pad.note.ocr.text = e.target.value;
+    saveSoon();
+  });
+
   // 일정 입력
   $('#ev-allday').onchange = (e) => $('#ev-times').classList.toggle('hidden', e.target.checked);
   $('#event-form').addEventListener('submit', onAddEvent);
@@ -1342,7 +1454,7 @@ function bind() {
 
   // 키보드 (윈도우)
   document.addEventListener('keydown', (e) => {
-    if (e.target.matches('input')) return;
+    if (e.target.matches('input, textarea')) return;
     if (state.view === 'day') {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? restore(pad.redo, pad.undo) : restore(pad.undo, pad.redo); }

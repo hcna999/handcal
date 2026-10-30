@@ -11,11 +11,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="필기캘린더">
-<link rel="stylesheet" href="style.css?v=7">
-<script src="config.js?v=7"></script>
+<link rel="stylesheet" href="style.css?v=8">
+<script src="config.js?v=8"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=7"></script>
-<script src="app.js?v=7" defer></script>
+<script src="vendor/perfect-freehand.js?v=8"></script>
+<script src="app.js?v=8" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -64,7 +64,8 @@
       </div>
     </div>
     <div class="day-body">
-      <details id="events-panel" class="events-panel" open>
+      <aside class="events-panel">
+      <details id="events-panel" open>
         <summary id="events-summary">일정</summary>
         <ul id="event-list"></ul>
         <form id="event-form" autocomplete="off">
@@ -78,6 +79,20 @@
           </div>
         </form>
       </details>
+      <details id="ocr-panel" open>
+        <summary>필기 → 글자 (AI)</summary>
+        <div class="ocr-actions">
+          <button id="ocr-btn" class="pill primary">글자로 변환</button>
+          <button id="ocr-copy" class="pill hidden">복사</button>
+        </div>
+        <p id="ocr-hint" class="muted-text">손글씨를 글자로 옮기고 요약·할 일을 정리해요.</p>
+        <div id="ocr-result" class="hidden">
+          <div id="ocr-summary"></div>
+          <label class="ocr-label" for="ocr-text">원문 (직접 고칠 수 있어요)</label>
+          <textarea id="ocr-text" rows="8"></textarea>
+        </div>
+      </details>
+      </aside>
       <div id="page-scroll" class="page-scroll">
         <div class="page-wrap">
           <canvas id="canvas"></canvas>

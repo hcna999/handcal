@@ -11,6 +11,8 @@
 //   NAVER_APP_PASSWORD    (비밀) 네이버 애플리케이션 비밀번호
 //   NAVER_CALDAV_URL      (선택) 기본값 https://caldav.calendar.naver.com
 //   TIMEZONE              (선택) 기본값 Asia/Seoul
+//   GEMINI_API_KEY        (비밀) 손글씨 → 글자 변환용 (aistudio.google.com 무료 키)
+//   GEMINI_MODEL          (선택) 기본값 gemini-flash-latest
 //   CALENDAR_COLORS       (선택) {"캘린더 이름":"#a48ce0"} 형식으로 캘린더 색 직접 지정
 
 export default {
@@ -40,8 +42,11 @@ export default {
       } else if (url.pathname === '/naver/debug' && req.method === 'GET') {
         await requireOwner(req, env);
         body = await naverDebug(env);
+      } else if (url.pathname === '/ocr' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await ocr(env, await req.json());
       } else if (url.pathname === '/') {
-        body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET };
+        body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: !!env.GEMINI_API_KEY };
       } else return json({ error: 'not_found' }, 404, cors);
       return json(body, 200, cors);
     } catch (e) {
@@ -112,6 +117,54 @@ async function requireOwner(req, env) {
   checkOwner(env, info.email);
   if (ownerCache.size > 50) ownerCache.clear();
   ownerCache.set(token, Date.now() + Math.min(Number(info.expires_in) || 300, 3000) * 1000);
+}
+
+// ---------- 손글씨 → 글자 (Gemini)
+const OCR_PROMPT = `이 이미지는 태블릿에 손으로 쓴 메모 또는 회의 필기야. 아래 항목을 JSON으로 답해.
+1) text: 손글씨를 보이는 그대로 글자로 옮겨. 줄바꿈, 목록 기호(-, •, 숫자), 화살표(→)는 유지해. 읽기 어려운 글자는 문맥으로 추정하되 확신이 없으면 [?]를 붙여. 그림·도형은 [그림: 짧은 설명]으로 적어. 내용을 고치거나 덧붙이지 마. 영어로 쓴 부분은 영어 그대로.
+2) summary: 핵심 내용을 한국어 1~3문장으로 요약. 내용이 너무 짧거나 의미가 없으면 빈 문자열.
+3) todos: 해야 할 일 목록. 담당자나 기한이 적혀 있으면 포함. 없으면 빈 배열.
+4) decisions: 결정된 사항 목록. 없으면 빈 배열.`;
+
+const OCR_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    text: { type: 'STRING' },
+    summary: { type: 'STRING' },
+    todos: { type: 'ARRAY', items: { type: 'STRING' } },
+    decisions: { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['text', 'summary', 'todos', 'decisions'],
+};
+
+async function ocr(env, body) {
+  if (!env.GEMINI_API_KEY) throw httpError(500, 'gemini_not_configured', '서버에 GEMINI_API_KEY가 설정되지 않았어요');
+  const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
+  if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
+  const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
+  const models = [...new Set([env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))];
+  let lastMsg = '';
+  for (const model of models) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }] }],
+        generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: OCR_SCHEMA },
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 404) { lastMsg = data.error?.message || ''; continue; } // 없는 모델이면 다음 후보
+    if (r.status === 429) throw httpError(429, 'gemini_quota', '무료 사용량을 다 썼어요. 잠시 후(또는 내일) 다시 시도해 주세요');
+    if (r.status === 400 && /API key/i.test(data.error?.message || '')) throw httpError(502, 'gemini_key', 'Gemini API 키가 올바르지 않아요');
+    if (!r.ok) throw httpError(502, 'gemini_error', `Gemini ${r.status}: ${(data.error?.message || '').slice(0, 200)}`);
+    const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+    let out;
+    try { out = JSON.parse(text); } catch { out = { text }; }
+    const list = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+    return { text: String(out.text || ''), summary: String(out.summary || ''), todos: list(out.todos), decisions: list(out.decisions), model };
+  }
+  throw httpError(502, 'gemini_model', '사용 가능한 Gemini 모델을 찾지 못했어요. ' + lastMsg.slice(0, 150));
 }
 
 // ---------- 네이버 CalDAV
