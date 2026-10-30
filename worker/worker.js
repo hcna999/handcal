@@ -12,7 +12,7 @@
 //   NAVER_CALDAV_URL      (선택) 기본값 https://caldav.calendar.naver.com
 //   TIMEZONE              (선택) 기본값 Asia/Seoul
 //   GEMINI_API_KEY        (비밀) 손글씨 → 글자 변환용 (aistudio.google.com 무료 키)
-//   GEMINI_MODEL          (선택) 기본값 gemini-2.5-flash
+//   GEMINI_MODEL          (선택) 먼저 쓸 모델. 기본 순서: gemini-2.5-flash → 2.5-flash-lite → …
 //   CALENDAR_COLORS       (선택) {"캘린더 이름":"#a48ce0"} 형식으로 캘린더 색 직접 지정
 
 export default {
@@ -142,11 +142,14 @@ async function ocr(env, body) {
   const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
   if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
   const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
-  // gemini-flash-latest는 응답이 몇 분씩 걸린 적이 있어 맨 뒤로
-  const models = [...new Set([env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-flash-latest'].filter(Boolean))];
-  const timeoutMs = Number(env.GEMINI_TIMEOUT_MS) || 40000;
-  let lastMsg = '';
+  // 무료 서버가 붐비거나(503) 늦으면 더 가벼운 모델로 넘어감. 전체 시간은 화면 제한(60초)보다 짧게
+  const models = [...new Set([env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-flash-latest'].filter(Boolean))];
+  const perModelMs = Number(env.GEMINI_TIMEOUT_MS) || 20000;
+  const deadline = Date.now() + 50000;
+  const fails = [];
   for (const model of models) {
+    const remaining = deadline - Date.now();
+    if (remaining < 3000) break;
     const generationConfig = { temperature: 0.2, responseMimeType: 'application/json', responseSchema: OCR_SCHEMA };
     // 글자 옮기기에는 생각 단계가 필요 없음 → 끄면 훨씬 빠름 (2.5 계열만 지원)
     if (/^gemini-2\.5-flash/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
@@ -159,26 +162,32 @@ async function ocr(env, body) {
           contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }] }],
           generationConfig,
         }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(Math.min(perModelMs, remaining)),
       });
     } catch (e) {
-      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-        throw httpError(504, 'gemini_timeout', `Gemini 응답이 ${Math.round(timeoutMs / 1000)}초 안에 오지 않았어요. 잠시 후 다시 시도해 주세요`);
-      }
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') { fails.push({ model, kind: 'timeout' }); continue; }
       throw e;
     }
     const data = await r.json().catch(() => ({}));
-    if (r.status === 404) { lastMsg = data.error?.message || ''; continue; } // 없는 모델이면 다음 후보
-    if (r.status === 429) throw httpError(429, 'gemini_quota', '무료 사용량을 다 썼어요. 잠시 후(또는 내일) 다시 시도해 주세요');
-    if (r.status === 400 && /API key/i.test(data.error?.message || '')) throw httpError(502, 'gemini_key', 'Gemini API 키가 올바르지 않아요');
-    if (!r.ok) throw httpError(502, 'gemini_error', `Gemini ${r.status}: ${(data.error?.message || '').slice(0, 200)}`);
+    const msg = data.error?.message || '';
+    if (r.status === 400 && /API key/i.test(msg)) throw httpError(502, 'gemini_key', 'Gemini API 키가 올바르지 않아요');
+    // 없는 모델(404), 사용량 초과(429, 무료 한도는 모델마다 따로), 붐빔(500/503) → 다음 모델
+    if ([404, 429, 500, 503].includes(r.status)) {
+      fails.push({ model, kind: r.status === 429 ? 'quota' : r.status === 404 ? 'missing' : 'busy', msg });
+      continue;
+    }
+    if (!r.ok) throw httpError(502, 'gemini_error', `Gemini ${r.status}: ${msg.slice(0, 200)}`);
     const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
     let out;
     try { out = JSON.parse(text); } catch { out = { text }; }
     const list = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
-    return { text: String(out.text || ''), summary: String(out.summary || ''), todos: list(out.todos), decisions: list(out.decisions), model };
+    return { text: String(out.text || ''), summary: String(out.summary || ''), todos: list(out.todos), decisions: list(out.decisions), model, tried: fails.map((f) => `${f.model}:${f.kind}`) };
   }
-  throw httpError(502, 'gemini_model', '사용 가능한 Gemini 모델을 찾지 못했어요. ' + lastMsg.slice(0, 150));
+  const kinds = new Set(fails.map((f) => f.kind));
+  const detail = fails.map((f) => `${f.model}:${f.kind}`).join(', ');
+  if (kinds.has('busy') || kinds.has('timeout')) throw httpError(503, 'gemini_busy', `지금 Gemini 무료 서버가 붐벼요. 1~2분 뒤 다시 시도해 주세요. (${detail})`);
+  if (kinds.has('quota')) throw httpError(429, 'gemini_quota', `무료 사용량을 다 썼어요. 잠시 후(또는 내일) 다시 시도해 주세요. (${detail})`);
+  throw httpError(502, 'gemini_model', `사용 가능한 Gemini 모델을 찾지 못했어요. (${detail})`);
 }
 
 // ---------- 네이버 CalDAV

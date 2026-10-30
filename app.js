@@ -1167,8 +1167,9 @@ function noteImage() {
   const m = 30;
   x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(PAGE_W, x1 + m); y1 += m;
   const w = x1 - x0, h = y1 - y0;
-  let k = Math.min(2, 1600 / w);
-  if (h * k > 8000) k = 8000 / h;
+  // 글자 인식에는 이 정도 해상도면 충분하고, 작을수록 AI 응답이 빠름
+  let k = Math.min(1.25, 1100 / w);
+  if (h * k > 5000) k = 5000 / h;
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(w * k));
   c.height = Math.max(1, Math.round(h * k));
