@@ -20,15 +20,15 @@
   // 화면 크기·기기 종류로 기본 글자 크기 자동 결정 (app.js의 autoFontPx와 같은 식)
   (function () {
     const coarse = matchMedia('(pointer: coarse)').matches;
-    const f = 10.5 + 0.0075 * Math.sqrt(innerWidth * innerHeight) + (coarse ? 1 : -1.5);
-    document.documentElement.style.setProperty('--fs-base', Math.max(14, Math.min(20, f)).toFixed(2) + 'px');
+    const f = 9.5 + 0.0065 * Math.sqrt(innerWidth * innerHeight) + (coarse ? 0.5 : -1);
+    document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=14">
-<script src="config.js?v=14"></script>
+<link rel="stylesheet" href="style.css?v=15">
+<script src="config.js?v=15"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=14"></script>
-<script src="app.js?v=14" defer></script>
+<script src="vendor/perfect-freehand.js?v=15"></script>
+<script src="app.js?v=15" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -52,6 +52,7 @@
       <div id="settings" class="settings hidden" role="dialog" aria-label="설정">
         <div class="settings-row">
           <span class="settings-label">글자 크기 (화면에 맞춰 자동 · 필요하면 보정)</span>
+          <span id="screen-info" class="settings-label"></span>
           <div class="seg">
             <button id="font-down" aria-label="글자 작게">가−</button>
             <button id="font-size-label" tabindex="-1">100%</button>

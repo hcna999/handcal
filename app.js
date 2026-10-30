@@ -515,6 +515,17 @@ function inkIcon() {
   return svg;
 }
 
+// 막대 배경색이 밝으면 검은 글자, 어두우면 흰 글자
+function textOn(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex || '');
+  if (!m) return '#fff';
+  const [r, g, b] = m.slice(1).map((h) => {
+    const c = parseInt(h, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? '#1f2328' : '#ffffff';
+}
+
 function monthRange() {
   const first = state.month;
   const start = addDays(first, -first.getDay());
@@ -585,6 +596,7 @@ async function renderMonth() {
         const n = it.last - it.first + 1;
         const chip = el('div', 'chip', it.ev.title);
         chip.style.setProperty('--c', it.ev.color);
+        chip.style.setProperty('--chip-text', textOn(it.ev.color));
         // 지난주/다음주로 이어지는 일정은 그쪽 끝을 칸 끝까지 붙이고 모서리를 각지게
         const contL = it.first === 0 && ymd(it.ev.start) < ds;
         const contR = it.last === 6 && events.on([it.ev], addDays(start, Math.floor(i / 7) * 7 + 7)).length > 0;
@@ -1563,12 +1575,12 @@ async function refreshInBackground() {
 // ---------- 설정: 글자 크기 · 화면 모드
 const UI_SCALES = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
 
-// 화면 면적이 클수록 글자를 키우고, 터치 기기는 조금 더 크게(손가락), 마우스 기기는 조금 작게
-// 예) 휴대폰 ≈ 16px, 아이패드 ≈ 19px, 노트북 ≈ 17px, 큰 모니터 = 최대 20px
+// 화면 면적이 클수록 글자를 키우고, 터치 기기는 조금 크게(손가락), 마우스 기기는 조금 작게
+// 기준: 갤럭시 폴드8 펼친 화면 ≈ 16px(일정 글자 약 12.8px), 접은 화면 ≈ 14px, 아이패드 ≈ 16.4px, 노트북 ≈ 14.6px
 function autoFontPx() {
   const coarse = window.matchMedia('(pointer: coarse)').matches;
-  const f = 10.5 + 0.0075 * Math.sqrt(window.innerWidth * window.innerHeight) + (coarse ? 1 : -1.5);
-  return Math.max(14, Math.min(20, f));
+  const f = 9.5 + 0.0065 * Math.sqrt(window.innerWidth * window.innerHeight) + (coarse ? 0.5 : -1);
+  return Math.max(13, Math.min(18, f));
 }
 function applyAutoFont() {
   document.documentElement.style.setProperty('--fs-base', autoFontPx().toFixed(2) + 'px');
@@ -1582,6 +1594,7 @@ const settings = {
     applyAutoFont();
     if (this.theme === 'auto') delete root.dataset.theme;
     else root.dataset.theme = this.theme;
+    $('#screen-info').textContent = `이 화면 ${window.innerWidth}×${window.innerHeight} · 기본 글자 ${autoFontPx().toFixed(1)}px`;
     $('#font-size-label').textContent = this.scale === 1 ? '자동' : `자동 ${this.scale > 1 ? '+' : '−'}${Math.round(Math.abs(this.scale - 1) * 100)}%`;
     $('#font-down').disabled = this.scale <= UI_SCALES[0];
     $('#font-up').disabled = this.scale >= UI_SCALES[UI_SCALES.length - 1];
@@ -1750,7 +1763,7 @@ function bind() {
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { applyAutoFont(); relayout(); }, 150);
+    resizeTimer = setTimeout(() => settings.apply(), 150);
   });
   window.addEventListener('online', () => { notes.flush(); refreshInBackground(); autoOcr.kick(); });
   window.addEventListener('offline', () => setStatus('offline'));

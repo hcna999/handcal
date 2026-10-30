@@ -174,19 +174,20 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chip {
   font-size: 0.8rem;
   line-height: 1.45;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip; /* 네이버처럼 칸 끝에서 자르기 → 글자를 더 보여줌 */
   flex-shrink: 0;
-  background: var(--accent-soft);
-  background: color-mix(in srgb, var(--c) 16%, var(--card));
-  border-left: 3px solid var(--c);
+  /* 네이버처럼 막대를 일정 색으로 꽉 채움. 글자색은 배경 밝기에 따라 자동(--chip-text) */
+  background: var(--c);
+  color: var(--chip-text, #fff);
+  font-weight: 500;
 }
 /* 여러 날에 걸친 일정: 옆 칸 위로 길게 이어서 그림 */
 .chip.span { position: relative; z-index: 1; pointer-events: none; }
-.chip.cont-left { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding-left: 7px; margin-left: -4px; }
+.chip.cont-left { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 9px; margin-left: -4px; }
 .chip.cont-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .chip.spacer { visibility: hidden; }
 .more { font-size: 0.75rem; color: var(--muted); padding-left: 4px; flex-shrink: 0; }
