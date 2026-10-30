@@ -1209,11 +1209,17 @@ async function runOcr() {
   const date = state.date, btn = $('#ocr-btn');
   btn.disabled = true;
   btn.textContent = '변환 중…';
+  // 서버가 끊지 못하는 경우를 대비해 화면 쪽에서도 시간 제한
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  const started = Date.now();
+  const tick = setInterval(() => { btn.textContent = `변환 중… ${Math.round((Date.now() - started) / 1000)}초`; }, 1000);
   try {
     const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/ocr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image, date }),
+      signal: ctrl.signal,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
@@ -1221,8 +1227,11 @@ async function runOcr() {
     pad.note.ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now() };
     saveSoon();
   } catch (e) {
-    handleErr(e);
+    if (e.name === 'AbortError') toast('변환이 1분 안에 끝나지 않아 멈췄어요. 다시 시도해 주세요', 5000);
+    else handleErr(e);
   } finally {
+    clearTimeout(timer);
+    clearInterval(tick);
     btn.disabled = false;
     if (state.date === date) renderOcr();
   }

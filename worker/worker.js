@@ -12,7 +12,7 @@
 //   NAVER_CALDAV_URL      (선택) 기본값 https://caldav.calendar.naver.com
 //   TIMEZONE              (선택) 기본값 Asia/Seoul
 //   GEMINI_API_KEY        (비밀) 손글씨 → 글자 변환용 (aistudio.google.com 무료 키)
-//   GEMINI_MODEL          (선택) 기본값 gemini-flash-latest
+//   GEMINI_MODEL          (선택) 기본값 gemini-2.5-flash
 //   CALENDAR_COLORS       (선택) {"캘린더 이름":"#a48ce0"} 형식으로 캘린더 색 직접 지정
 
 export default {
@@ -142,17 +142,31 @@ async function ocr(env, body) {
   const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
   if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
   const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
-  const models = [...new Set([env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))];
+  // gemini-flash-latest는 응답이 몇 분씩 걸린 적이 있어 맨 뒤로
+  const models = [...new Set([env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-flash-latest'].filter(Boolean))];
+  const timeoutMs = Number(env.GEMINI_TIMEOUT_MS) || 40000;
   let lastMsg = '';
   for (const model of models) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }] }],
-        generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: OCR_SCHEMA },
-      }),
-    });
+    const generationConfig = { temperature: 0.2, responseMimeType: 'application/json', responseSchema: OCR_SCHEMA };
+    // 글자 옮기기에는 생각 단계가 필요 없음 → 끄면 훨씬 빠름 (2.5 계열만 지원)
+    if (/^gemini-2\.5-flash/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    let r;
+    try {
+      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }] }],
+          generationConfig,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+        throw httpError(504, 'gemini_timeout', `Gemini 응답이 ${Math.round(timeoutMs / 1000)}초 안에 오지 않았어요. 잠시 후 다시 시도해 주세요`);
+      }
+      throw e;
+    }
     const data = await r.json().catch(() => ({}));
     if (r.status === 404) { lastMsg = data.error?.message || ''; continue; } // 없는 모델이면 다음 후보
     if (r.status === 429) throw httpError(429, 'gemini_quota', '무료 사용량을 다 썼어요. 잠시 후(또는 내일) 다시 시도해 주세요');
