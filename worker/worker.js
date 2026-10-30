@@ -11,6 +11,7 @@
 //   NAVER_APP_PASSWORD    (비밀) 네이버 애플리케이션 비밀번호
 //   NAVER_CALDAV_URL      (선택) 기본값 https://caldav.calendar.naver.com
 //   TIMEZONE              (선택) 기본값 Asia/Seoul
+//   CALENDAR_COLORS       (선택) {"캘린더 이름":"#a48ce0"} 형식으로 캘린더 색 직접 지정
 
 export default {
   async fetch(req, env) {
@@ -116,7 +117,7 @@ async function requireOwner(req, env) {
 // ---------- 네이버 CalDAV
 const PROPFIND_PRINCIPAL = '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>';
 const PROPFIND_HOME = '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set/></d:prop></d:propfind>';
-const PROPFIND_CALS = '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:a="http://apple.com/ns/ical/"><d:prop><d:resourcetype/><d:displayname/><a:calendar-color/><c:supported-calendar-component-set/></d:prop></d:propfind>';
+const PROPFIND_CALS = '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:a="http://apple.com/ns/ical/"><d:prop><d:resourcetype/><d:displayname/><a:calendar-color/><n:color/><n:calendar-color/><n:bgcolor/><c:supported-calendar-component-set/></d:prop></d:propfind>'.replace('xmlns:a=', 'xmlns:n="http://calendar.naver.com/" xmlns:a=');
 const reportQuery = (start, end) =>
   '<?xml version="1.0" encoding="utf-8"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">' +
   '<d:prop><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">' +
@@ -153,7 +154,25 @@ function decodeXml(s) {
     .replace(/&amp;/g, '&');
 }
 const hrefIn = (xml) => { const h = xml && first(xml, 'href'); return h ? decodeXml(h.trim()) : null; };
-const normColor = (c) => { const m = /#[0-9a-f]{6}/i.exec(c || ''); return m ? m[0] : '#03c75a'; };
+const CSS_COLORS = { red: '#ff0000', orange: '#ffa500', yellow: '#ffff00', green: '#008000', blue: '#0000ff', purple: '#800080', pink: '#ffc0cb', brown: '#a52a2a', gray: '#808080', grey: '#808080', black: '#000000', navy: '#000080', teal: '#008080', olive: '#808000', maroon: '#800000', violet: '#ee82ee', gold: '#ffd700', coral: '#ff7f50', salmon: '#fa8072', orchid: '#da70d6', lavender: '#e6e6fa', skyblue: '#87ceeb', crimson: '#dc143c', indigo: '#4b0082', tomato: '#ff6347' };
+const hexColor = (c) => {
+  const v = (c || '').trim();
+  const m = /#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/i.exec(v);
+  if (m) return m[1].length === 3 ? '#' + m[1].split('').map((x) => x + x).join('') : m[0];
+  return CSS_COLORS[v.toLowerCase()] || null;
+};
+const normColor = (c) => hexColor(c) || '#03c75a';
+// 응답 안에서 이름에 color가 들어간 속성 중 색 값이 있는 첫 번째
+function anyColor(xml) {
+  const re = /<((?:[\w-]+:)?[\w-]*colou?r[\w-]*)(?=[\s>])[^>]*>([^<]*)<\/\1>/gi;
+  let m;
+  while ((m = re.exec(xml))) { const c = hexColor(m[2]); if (c) return c; }
+  return null;
+}
+// 선택: Worker 변수 CALENDAR_COLORS = {"캘린더 이름":"#a48ce0"} 로 캘린더 색 직접 지정
+function colorOverrides(env) {
+  try { return JSON.parse(env.CALENDAR_COLORS || '{}'); } catch { return {}; }
+}
 
 let calCache = null;
 async function calendars(env) {
@@ -184,10 +203,12 @@ async function calendars(env) {
     if (!/<(?:[\w-]+:)?calendar[\s/>]/i.test(rt)) continue;
     const comps = first(r, 'supported-calendar-component-set');
     if (comps && !/VEVENT/i.test(comps)) continue;
+    const name = decodeXml((first(r, 'displayname') || '').trim()) || '네이버 캘린더';
+    const over = colorOverrides(env)[name];
     cals.push({
       href: abs(hrefIn(r)),
-      name: decodeXml((first(r, 'displayname') || '').trim()) || '네이버 캘린더',
-      color: normColor(first(r, 'calendar-color')),
+      name,
+      color: hexColor(over) || hexColor(first(r, 'calendar-color')) || anyColor(r) || '#03c75a',
     });
   }
   calCache = { at: Date.now(), cals };
@@ -220,7 +241,29 @@ async function naverDebug(env) {
       out.push({ calendar: cal.name, href: cal.href, error: e.message });
     }
   }
-  return { reports: out };
+  // 캘린더 목록 원본(색 속성 확인용)과 일정 원본 1건
+  let calProps = null, ics = null;
+  try {
+    const base = davBase(env);
+    const home = new URL(cals[0].href).toString().replace(/[^/]+\/?$/, '');
+    const x = await dav(env, 'PROPFIND', home, '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:allprop/></d:propfind>', 1);
+    calProps = x.slice(0, 6000);
+    const cal = cals.find((c) => /차장방|기자재/.test(c.name)) || cals[0];
+    const stat = {};
+    const v = await fetchCalendarEventsRaw(env, cal, start, end, stat);
+    ics = v.slice(0, 2500);
+    void base;
+  } catch (e) { calProps = calProps || 'ERR ' + e.message; }
+  return { reports: out, calProps, ics };
+}
+
+async function fetchCalendarEventsRaw(env, cal, start, end) {
+  const x = await dav(env, 'REPORT', cal.href, reportQuery(fmtDav(start), fmtDav(end)), 1);
+  const hrefs = responses(x).map(hrefIn).filter((h) => h && !/\/$/.test(h)).slice(0, 2);
+  if (!hrefs.length) return '';
+  const mx = await dav(env, 'REPORT', cal.href, multigetQuery(hrefs), 1);
+  const data = first(mx, 'calendar-data');
+  return data ? decodeXml(data) : mx;
 }
 
 const fmtDav = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -464,6 +507,13 @@ function expandEvents(vevents, cal, fromMs, toMs, tz) {
     }
   }
   const fromWall = utcToWall(fromMs, tz) - DAY, toWall = utcToWall(toMs, tz) + DAY;
+  const eventColor = (ev) => {
+    if (ev.COLOR) { const c = hexColor(ev.COLOR.value); if (c) return c; }
+    for (const k of Object.keys(ev)) {
+      if (/COLOU?R/.test(k) && ev[k] && ev[k].value) { const c = hexColor(ev[k].value); if (c) return c; }
+    }
+    return cal.color;
+  };
 
   for (const ev of vevents) {
     if (ev.STATUS?.value === 'CANCELLED') continue;
@@ -477,14 +527,15 @@ function expandEvents(vevents, cal, fromMs, toMs, tz) {
     else dur = st.allDay ? DAY : 0;
     if (st.allDay) dur = Math.max(DAY, Math.round(dur / DAY) * DAY);
     const title = ev.SUMMARY ? unescapeText(ev.SUMMARY.value) || '(제목 없음)' : '(제목 없음)';
+    const color = eventColor(ev);
 
     const emit = (wall) => {
       if (wall > toWall || wall + dur < fromWall) return;
       if (st.allDay) {
-        out.push({ id: `${uid}@${ymdUTC(wall)}`, title, allDay: true, start: ymdUTC(wall), end: ymdUTC(wall + dur), calendar: cal.name, color: cal.color });
+        out.push({ id: `${uid}@${ymdUTC(wall)}`, title, allDay: true, start: ymdUTC(wall), end: ymdUTC(wall + dur), calendar: cal.name, color });
       } else {
         const s = wallToUtc(wall, tz), e = wallToUtc(wall + dur, tz);
-        out.push({ id: `${uid}@${s}`, title, allDay: false, start: new Date(s).toISOString(), end: new Date(e).toISOString(), calendar: cal.name, color: cal.color });
+        out.push({ id: `${uid}@${s}`, title, allDay: false, start: new Date(s).toISOString(), end: new Date(e).toISOString(), calendar: cal.name, color });
       }
     };
 
