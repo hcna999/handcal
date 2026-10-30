@@ -532,8 +532,8 @@ async function renderMonth() {
   const cellH = (grid.clientHeight || 600) / weeks;
   const anyDigest = Array.from({ length: weeks * 7 }, (_, i) => digests.get(ymd(addDays(start, i)))).some(Boolean);
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  const chipH = rem * 0.94 + 2;
-  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.15 - (anyDigest ? chipH : 0)) / chipH));
+  const chipH = rem * 1.02 + 2;
+  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.3 - (anyDigest ? chipH : 0)) / chipH));
   const evs = events.cached(start, end);
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
@@ -1562,15 +1562,27 @@ async function refreshInBackground() {
 
 // ---------- 설정: 글자 크기 · 화면 모드
 const UI_SCALES = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
+
+// 화면 면적이 클수록 글자를 키우고, 터치 기기는 조금 더 크게(손가락), 마우스 기기는 조금 작게
+// 예) 휴대폰 ≈ 16px, 아이패드 ≈ 19px, 노트북 ≈ 17px, 큰 모니터 = 최대 20px
+function autoFontPx() {
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const f = 10.5 + 0.0075 * Math.sqrt(window.innerWidth * window.innerHeight) + (coarse ? 1 : -1.5);
+  return Math.max(14, Math.min(20, f));
+}
+function applyAutoFont() {
+  document.documentElement.style.setProperty('--fs-base', autoFontPx().toFixed(2) + 'px');
+}
 const settings = {
   scale: store.get('uiScale', 1),
   theme: store.get('theme', 'auto'),
   apply() {
     const root = document.documentElement;
     root.style.setProperty('--ui-scale', this.scale);
+    applyAutoFont();
     if (this.theme === 'auto') delete root.dataset.theme;
     else root.dataset.theme = this.theme;
-    $('#font-size-label').textContent = Math.round(this.scale * 100) + '%';
+    $('#font-size-label').textContent = this.scale === 1 ? '자동' : `자동 ${this.scale > 1 ? '+' : '−'}${Math.round(Math.abs(this.scale - 1) * 100)}%`;
     $('#font-down').disabled = this.scale <= UI_SCALES[0];
     $('#font-up').disabled = this.scale >= UI_SCALES[UI_SCALES.length - 1];
     document.querySelectorAll('#theme-seg button').forEach((b) => b.classList.toggle('active', b.dataset.theme === this.theme));
@@ -1738,7 +1750,7 @@ function bind() {
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => (state.view === 'day' ? layoutPad() : renderMonth()), 150);
+    resizeTimer = setTimeout(() => { applyAutoFont(); relayout(); }, 150);
   });
   window.addEventListener('online', () => { notes.flush(); refreshInBackground(); autoOcr.kick(); });
   window.addEventListener('offline', () => setStatus('offline'));

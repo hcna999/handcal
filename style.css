@@ -20,8 +20,8 @@
   --page-break: #cfd4db;
   --is-dark: 0;
   color-scheme: light;
-  /* 화면 폭에 따라 글자 크기가 자동으로 바뀌고, 설정의 글자 크기(--ui-scale)를 곱함 */
-  --fs-base: clamp(15px, 14px + 0.22vw, 18px);
+  /* 기본 글자 크기(--fs-base)는 화면 크기·기기 종류를 보고 스크립트가 자동으로 정함. 설정의 보정(--ui-scale)을 곱함 */
+  --fs-base: 16px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -134,7 +134,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* ---------- month */
 #month-view { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px; padding-bottom: calc(env(safe-area-inset-bottom) + 8px); }
 .weekdays, .grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
-.weekdays div { text-align: center; font-size: 0.8125rem; color: var(--muted); padding: 4px 0; }
+.weekdays div { text-align: center; font-size: 0.875rem; color: var(--muted); padding: 4px 0; }
 .weekdays .sun { color: var(--sun); }
 .weekdays .sat { color: var(--sat); }
 .grid {
@@ -166,13 +166,13 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cell.other { background: var(--cell-other); }
 .cell.other .num { opacity: .4; }
 .cell-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-.num { font-size: 0.8125rem; font-weight: 600; width: 1.85em; height: 1.85em; display: grid; place-items: center; border-radius: 50%; }
+.num { font-size: 0.9rem; font-weight: 600; width: 1.85em; height: 1.85em; display: grid; place-items: center; border-radius: 50%; }
 .num.sun { color: var(--sun); }
 .num.sat { color: var(--sat); }
 .cell.today .num { background: var(--accent); color: #fff; }
 .ink { width: 18px; height: 18px; color: var(--accent); flex-shrink: 0; }
 .chip {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.36;
   padding: 0 4px;
   border-radius: 4px;
@@ -189,7 +189,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chip.cont-left { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding-left: 7px; margin-left: -4px; }
 .chip.cont-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .chip.spacer { visibility: hidden; }
-.more { font-size: 0.6875rem; color: var(--muted); padding-left: 4px; flex-shrink: 0; }
+.more { font-size: 0.75rem; color: var(--muted); padding-left: 4px; flex-shrink: 0; }
 
 /* ---------- day */
 #day-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -284,7 +284,7 @@ canvas { display: block; touch-action: none; }
 #ocr-text { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 0.875rem; line-height: 1.5; resize: vertical; background: var(--input); color: var(--text); }
 .digest {
   margin-top: auto;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.36;
   color: var(--muted-strong);
   white-space: nowrap;
