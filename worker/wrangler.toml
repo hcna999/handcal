@@ -1,0 +1,7 @@
+# Cloudflare Worker 배포 설정 (GitHub Actions에서 자동 배포)
+name = "handcal"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+# 대시보드에서 넣은 변수(ALLOWED_ORIGIN 등)를 배포할 때 지우지 않음. 비밀값은 원래 유지됨
+keep_vars = true
