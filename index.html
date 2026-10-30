@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=17">
-<script src="config.js?v=17"></script>
+<link rel="stylesheet" href="style.css?v=18">
+<script src="config.js?v=18"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=17"></script>
-<script src="app.js?v=17" defer></script>
+<script src="vendor/perfect-freehand.js?v=18"></script>
+<script src="app.js?v=18" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -105,8 +105,8 @@
         <span class="sheet-grip" aria-hidden="true"></span>
         <button id="panel-close" class="pill">닫기</button>
       </div>
-      <details id="events-panel" open>
-        <summary id="events-summary">일정</summary>
+      <section id="events-panel" class="panel-sec">
+        <h2 id="events-summary">일정</h2>
         <ul id="event-list"></ul>
         <form id="event-form" autocomplete="off">
           <input id="ev-title" placeholder="메모 일정 입력 (네이버에는 저장 안 됨)" required>
@@ -118,9 +118,9 @@
             <button type="submit" class="pill primary">추가</button>
           </div>
         </form>
-      </details>
-      <details id="ocr-panel" open>
-        <summary>필기 → 글자 (AI)</summary>
+      </section>
+      <section id="ocr-panel" class="panel-sec">
+        <h2>필기 → 글자 (AI)</h2>
         <div class="ocr-actions">
           <button id="ocr-btn" class="pill primary">글자로 변환</button>
           <button id="ocr-copy" class="pill hidden">복사</button>
@@ -131,15 +131,16 @@
           <label class="ocr-label" for="ocr-text">원문 (직접 고칠 수 있어요)</label>
           <textarea id="ocr-text" rows="8"></textarea>
         </div>
-      </details>
+      </section>
       </aside>
       <div id="page-scroll" class="page-scroll">
+        <div id="page-tabs" class="page-tabs" role="tablist" aria-label="필기 탭"></div>
         <div class="page-wrap">
           <canvas id="canvas"></canvas>
           <canvas id="overlay"></canvas>
           <div id="loading" class="loading hidden">불러오는 중…</div>
         </div>
-        <button id="add-page" class="pill">+ 페이지 늘리기</button>
+        <button id="add-page" class="pill">+ 종이 아래로 늘리기</button>
       </div>
     </div>
   </section>

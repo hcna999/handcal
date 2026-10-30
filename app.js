@@ -235,15 +235,26 @@ const drive = {
 };
 
 // ---------- 필기 노트 (기기 저장 + 드라이브 동기화)
-const blankNote = () => ({ v: 1, height: PAGE_H, strokes: [], updated: 0 });
+// 하루 필기 = 탭(pages) 최대 MAX_TABS개. 각 탭은 자기 획·종이 길이·글자 변환 결과를 가짐
+const MAX_TABS = 5;
+const newPageId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const blankPage = () => ({ id: newPageId(), height: PAGE_H, strokes: [] });
+const blankNote = () => ({ v: 2, pages: [blankPage()], updated: 0 });
+const normPage = (p, id) => ({
+  id: p?.id || id,
+  height: Math.max(PAGE_H, Number(p?.height) || PAGE_H),
+  strokes: Array.isArray(p?.strokes) ? p.strokes : [],
+  ...(p?.ocr ? { ocr: p.ocr } : {}),
+});
+// 예전 형식(탭 없이 strokes 하나)도 첫 번째 탭으로 읽음
 const normalize = (n) => ({
-  v: 1,
-  height: Math.max(PAGE_H, Number(n?.height) || PAGE_H),
-  strokes: Array.isArray(n?.strokes) ? n.strokes : [],
+  v: 2,
+  pages: Array.isArray(n?.pages) && n.pages.length ? n.pages.map((p, i) => normPage(p, 'p' + i)) : [normPage(n, 'p0')],
   updated: n?.updated || 0,
   remoteTime: n?.remoteTime,
-  ocr: n?.ocr,
 });
+const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length);
+const cloneDoc = (doc) => ({ ...doc, pages: doc.pages.map((p) => ({ ...p, strokes: p.strokes.slice() })) });
 
 const notes = {
   localDays: new Set(),
@@ -309,7 +320,7 @@ const notes = {
 
   async put(d, note) {
     note.updated = Date.now();
-    if (note.strokes.length) { await idb.set('note:' + d, note); this.localDays.add(d); }
+    if (!docEmpty(note)) { await idb.set('note:' + d, note); this.localDays.add(d); }
     else { await idb.del('note:' + d); this.localDays.delete(d); }
     this.pending.add(d);
     this.savePending();
@@ -324,14 +335,15 @@ const notes = {
     if (this.pending.size) setStatus('saving');
     try {
       for (const d of [...this.pending]) {
-        const local = await idb.get('note:' + d);
+        const raw = await idb.get('note:' + d);
+        const local = raw && normalize(raw);
         const r = this.remote.get(d);
-        if (local?.strokes?.length) {
-          const payload = { v: 1, date: d, height: local.height, strokes: local.strokes, updated: local.updated, ocr: local.ocr };
+        if (local && !docEmpty(local)) {
+          const payload = { v: 2, date: d, pages: local.pages, updated: raw.updated };
           const f = r ? await drive.update(r.id, payload) : await drive.create(d + '.json', payload);
           this.remote.set(d, f);
           const cur = await idb.get('note:' + d);
-          if (cur && cur.updated === local.updated) {
+          if (cur && cur.updated === raw.updated) {
             cur.remoteTime = f.modifiedTime;
             await idb.set('note:' + d, cur);
             this.pending.delete(d);
@@ -672,7 +684,8 @@ function isIPad() {
 const pad = {
   canvas: null, ctx: null, overlay: null, octx: null,
   scale: 1, dpr: 1,
-  note: blankNote(), loading: false,
+  doc: blankNote(), pageIdx: 0, loading: false,
+  get note() { return this.doc.pages[this.pageIdx] || this.doc.pages[0]; },
   undo: [], redo: [],
   tool: 'pen',
   colors: store.get('colors', { pen: COLORS[0], hl: '#facc15' }),
@@ -1029,10 +1042,10 @@ async function saveNow() {
   saveTimer = null;
   if (!state.date) return;
   const date = state.date;
-  try { await notes.put(date, { ...pad.note, strokes: pad.note.strokes.slice() }); }
+  try { await notes.put(date, cloneDoc(pad.doc)); }
   catch (e) { handleErr(e); }
-  if (!pad.note.strokes.length) { autoOcr.drop(date); digests.remove(date); }
-  else if (needsOcr(pad.note)) { pad.lastEdit = Date.now(); autoOcr.touch(date); }
+  if (docEmpty(pad.doc)) { autoOcr.drop(date); digests.remove(date); }
+  else if (docNeedsOcr(pad.doc)) { pad.lastEdit = Date.now(); autoOcr.touch(date); }
   if (!auth.connected()) setStatus();
 }
 
@@ -1106,7 +1119,9 @@ async function openDay(ds, { push = true } = {}) {
   $('#day-title').textContent = dayTitle(d);
   $('#ev-title').value = '';
 
-  pad.note = blankNote();
+  pad.doc = blankNote();
+  pad.pageIdx = 0;
+  renderTabs();
   renderOcr();
   pad.undo = [];
   pad.redo = [];
@@ -1123,7 +1138,9 @@ async function openDay(ds, { push = true } = {}) {
     await notes.refreshIndex(60000).catch((e) => { if (e.message === 'AUTH') throw e; console.warn(e); });
     const note = await notes.get(ds);
     if (token !== dayToken) return;
-    pad.note = note;
+    pad.doc = note;
+    pad.pageIdx = 0;
+    renderTabs();
     renderOcr();
     layoutPad();
   } catch (e) {
@@ -1148,6 +1165,73 @@ async function closeDay() {
   $('#month-nav').classList.remove('hidden');
   renderMonth();
   refreshInBackground();
+}
+
+// ---------- 필기 탭
+function tabLabel(page, i) {
+  const first = (page.ocr?.text || '').split('\n').map((l) => l.replace(/^[-•\d.\s]+/, '').trim()).find(Boolean);
+  return first ? first.slice(0, 10) : `필기 ${i + 1}`;
+}
+
+function renderTabs() {
+  const bar = $('#page-tabs');
+  const pages = pad.doc.pages;
+  const items = pages.map((p, i) => {
+    const b = el('button', 'page-tab' + (i === pad.pageIdx ? ' active' : ''));
+    b.append(el('span', 'page-tab-label', tabLabel(p, i)));
+    if (p.ocr && !needsOcr(p)) b.append(el('span', 'page-tab-done', '✓'));
+    b.title = p.ocr?.summary || `필기 ${i + 1}`;
+    b.onclick = () => switchPage(i);
+    if (i === pad.pageIdx && pages.length > 1) {
+      const x = el('span', 'page-tab-x', '✕');
+      x.setAttribute('role', 'button');
+      x.setAttribute('aria-label', '이 탭 삭제');
+      x.onclick = (e) => { e.stopPropagation(); deletePage(i); };
+      b.append(x);
+    }
+    return b;
+  });
+  if (pages.length < MAX_TABS) {
+    const add = el('button', 'page-tab add', '+');
+    add.setAttribute('aria-label', '새 필기 탭');
+    add.title = `새 필기 탭 (최대 ${MAX_TABS}개)`;
+    add.onclick = addPage;
+    items.push(add);
+  }
+  bar.replaceChildren(...items);
+}
+
+function switchPage(i) {
+  if (i === pad.pageIdx || pad.active) return;
+  pad.pageIdx = i;
+  pad.undo = [];
+  pad.redo = [];
+  updateUndoUI();
+  $('#page-scroll').scrollTop = 0;
+  renderTabs();
+  renderOcr();
+  layoutPad();
+}
+
+function addPage() {
+  if (pad.doc.pages.length >= MAX_TABS || pad.loading) return;
+  pad.doc.pages.push(blankPage());
+  switchPage(pad.doc.pages.length - 1);
+}
+
+function deletePage(i) {
+  const page = pad.doc.pages[i];
+  if (page.strokes.length && !confirm(`'${tabLabel(page, i)}' 탭을 삭제할까요? 되돌릴 수 없어요.`)) return;
+  pad.doc.pages.splice(i, 1);
+  pad.pageIdx = Math.min(i, pad.doc.pages.length - 1);
+  pad.undo = [];
+  pad.redo = [];
+  updateUndoUI();
+  renderTabs();
+  renderOcr();
+  layoutPad();
+  saveSoon();
+  refreshDigest(state.date, pad.doc);
 }
 
 function shiftDay(n) {
@@ -1249,6 +1333,18 @@ async function onAddEvent(ev) {
 // 필기 상태를 짧은 문자열로: 바뀌었으면 다시 변환해야 함
 const inkSig = (note) => note.strokes.length + ':' + note.strokes.reduce((a, s) => a + s.points.length, 0);
 const needsOcr = (note) => !!note?.strokes?.length && (!note.ocr || (note.ocr.sig && note.ocr.sig !== inkSig(note)));
+const docNeedsOcr = (doc) => doc.pages.some(needsOcr);
+// 달력 칸 요약: 탭마다 한 줄씩 이어 붙이고 할 일 개수는 합침
+function digestOf(doc) {
+  const done = doc.pages.filter((p) => p.ocr && p.strokes.length);
+  if (!done.length) return null;
+  return { text: done.map((p) => digestLine(p.ocr)).filter(Boolean).join(' · ').slice(0, 120), todos: done.reduce((a, p) => a + (p.ocr.todos?.length || 0), 0) };
+}
+function refreshDigest(date, doc) {
+  const d = digestOf(doc), cur = digests.get(date);
+  if (!d) { digests.remove(date); return; }
+  if (!cur || cur.text !== d.text || cur.todos !== d.todos) digests.set(date, d);
+}
 const digestLine = (o) => (o.summary || (o.text || '').split('\n').find((l) => l.trim()) || '').trim().slice(0, 80);
 
 function noteImage(note) {
@@ -1313,20 +1409,25 @@ async function ocrRequest(image, date) {
 }
 
 // 변환 결과를 노트에 저장하고 달력용 요약을 갱신. 그사이 필기가 바뀌었으면 false
-async function applyOcr(date, data, sig) {
+async function applyOcr(date, pageId, data, sig) {
   const ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now(), sig };
+  let doc;
   if (state.date === date) {
-    if (inkSig(pad.note) !== sig) return false;
-    pad.note.ocr = ocr;
+    doc = pad.doc;
+    const page = doc.pages.find((p) => p.id === pageId);
+    if (!page || inkSig(page) !== sig) return false;
+    page.ocr = ocr;
     saveSoon();
     renderOcr();
+    renderTabs();
   } else {
-    const note = await notes.get(date);
-    if (inkSig(note) !== sig) return false;
-    note.ocr = ocr;
-    await notes.put(date, note);
+    doc = await notes.get(date);
+    const page = doc.pages.find((p) => p.id === pageId);
+    if (!page || inkSig(page) !== sig) return false;
+    page.ocr = ocr;
+    await notes.put(date, doc);
   }
-  digests.set(date, { text: digestLine(ocr), todos: ocr.todos?.length || 0 });
+  refreshDigest(date, doc);
   if (state.view === 'month') renderMonth();
   return true;
 }
@@ -1411,8 +1512,8 @@ const autoOcr = {
     const since = Date.now() - 30 * 86400e3;
     for (const d of notes.localDays) {
       if (this.queue.has(d) || this.timers.has(d)) continue;
-      const note = await idb.get('note:' + d).catch(() => null);
-      if (note && (note.updated || 0) > since && needsOcr(note)) this.queue.add(d);
+      const raw = await idb.get('note:' + d).catch(() => null);
+      if (raw && (raw.updated || 0) > since && docNeedsOcr(normalize(raw))) this.queue.add(d);
     }
     this.save();
     this.kick();
@@ -1430,13 +1531,16 @@ const autoOcr = {
       for (const d of [...this.queue]) {
         if (this.timers.has(d)) continue; // 아직 쓰는 중
         if (state.date === d && Date.now() - pad.lastEdit < this.IDLE_MS) { later = this.IDLE_MS; continue; }
-        const note = state.date === d ? pad.note : await notes.get(d);
-        if (!needsOcr(note)) { this.queue.delete(d); this.save(); continue; }
-        const sig = inkSig(note);
+        const doc = state.date === d ? pad.doc : await notes.get(d);
+        const page = doc.pages.find(needsOcr);
+        if (!page) { this.queue.delete(d); this.save(); continue; }
+        const sig = inkSig(page);
         try {
-          const data = await ocrRequest(noteImage(note), d);
-          if (await applyOcr(d, data, sig)) { this.queue.delete(d); this.save(); }
+          const data = await ocrRequest(noteImage(page), d);
+          await applyOcr(d, page.id, data, sig);
+          later = 1000; // 같은 날 다른 탭이 남았으면 곧 이어서
           this.fails = 0;
+          break;
         } catch (e) {
           if (e.message === 'AUTH') break;
           const busy = ['gemini_busy', 'gemini_timeout'].includes(e.code) || !e.status || e.status >= 500;
@@ -1486,14 +1590,14 @@ async function runOcr() {
   if (!auth.connected()) return toast('먼저 구글 로그인을 해주세요');
   const image = noteImage(pad.note);
   if (!image) return toast('변환할 필기가 없어요');
-  const date = state.date, sig = inkSig(pad.note), btn = $('#ocr-btn');
+  const date = state.date, pageId = pad.note.id, sig = inkSig(pad.note), btn = $('#ocr-btn');
   btn.disabled = true;
   const started = Date.now();
   btn.textContent = '변환 중…';
   const tick = setInterval(() => { btn.textContent = `변환 중… ${Math.round((Date.now() - started) / 1000)}초`; }, 1000);
   try {
     const data = await ocrRequest(image, date);
-    if (await applyOcr(date, data, sig)) autoOcr.drop(date);
+    if (await applyOcr(date, pageId, data, sig) && !docNeedsOcr(pad.doc)) autoOcr.drop(date);
   } catch (e) {
     handleErr(e);
   } finally {
@@ -1797,7 +1901,7 @@ function bind() {
   setFingerDraw(pad.fingerDraw);
   $('#finger-mode').onclick = () => setFingerDraw(!pad.fingerDraw);
   $('#clear').onclick = () => {
-    if (!pad.note.strokes.length || !confirm('이 날의 필기를 모두 지울까요? (실행 취소 가능)')) return;
+    if (!pad.note.strokes.length || !confirm('이 탭의 필기를 모두 지울까요? (실행 취소 가능)')) return;
     pushUndo();
     pad.note.strokes = [];
     redraw();
@@ -1835,7 +1939,6 @@ function bind() {
   // 일정 입력
   $('#ev-allday').onchange = (e) => $('#ev-times').classList.toggle('hidden', e.target.checked);
   $('#event-form').addEventListener('submit', onAddEvent);
-  if (window.matchMedia('(max-width: 899px)').matches && window.innerHeight < 700) $('#events-panel').open = false;
 
   // 키보드 (윈도우)
   document.addEventListener('keydown', (e) => {
