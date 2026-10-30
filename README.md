@@ -71,6 +71,17 @@
 
 확인: Worker 주소를 브라우저로 열면 `"naver":true,"google":true`가 보여야 합니다.
 
+## 1-3. 손글씨 → 글자 변환 (Gemini 무료)
+
+1. https://aistudio.google.com/apikey 접속 → 구글 로그인 → **API 키 만들기** → 키 복사 (카드 등록 필요 없음)
+2. Cloudflare Worker → **Settings → Variables and Secrets → + Add**
+   - Type: **Secret**, 이름: `GEMINI_API_KEY`, 값: 복사한 키 → Deploy
+3. Worker의 최신 `worker/worker.js` 코드를 다시 붙여넣고 **Deploy**
+4. 확인: Worker 주소를 열었을 때 `"gemini":true`
+
+사용: 필기 화면 왼쪽 **필기 → 글자 (AI)** → **글자로 변환**. 원문·요약·할 일·결정 사항이 나오고, 원문은 직접 고칠 수 있으며 드라이브에 함께 저장됩니다.
+무료 사용분은 하루 사용량 제한이 있고, 구글이 서비스 개선에 사용할 수 있습니다.
+
 ## 2. 인터넷에 올리기 (GitHub Pages, 무료)
 
 1. GitHub에서 새 저장소 생성 (예: `handcal`)
