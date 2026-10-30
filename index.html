@@ -11,11 +11,18 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="필기캘린더">
-<link rel="stylesheet" href="style.css?v=11">
-<script src="config.js?v=11"></script>
+<script>
+  try {
+    const t = JSON.parse(localStorage.getItem('theme') || '"auto"');
+    if (t !== 'auto') document.documentElement.dataset.theme = t;
+    document.documentElement.style.setProperty('--ui-scale', JSON.parse(localStorage.getItem('uiScale') || '1'));
+  } catch (e) { /* 저장소 사용 불가 */ }
+</script>
+<link rel="stylesheet" href="style.css?v=12">
+<script src="config.js?v=12"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=11"></script>
-<script src="app.js?v=11" defer></script>
+<script src="vendor/perfect-freehand.js?v=12"></script>
+<script src="app.js?v=12" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -34,6 +41,27 @@
   <div class="right">
     <span id="sync-status" class="status"></span>
     <button id="auth-btn" class="pill primary">구글 로그인</button>
+    <div class="settings-wrap">
+      <button id="settings-btn" class="pill" aria-label="설정" aria-expanded="false">⚙</button>
+      <div id="settings" class="settings hidden" role="dialog" aria-label="설정">
+        <div class="settings-row">
+          <span class="settings-label">글자 크기</span>
+          <div class="seg">
+            <button id="font-down" aria-label="글자 작게">가−</button>
+            <button id="font-size-label" tabindex="-1">100%</button>
+            <button id="font-up" aria-label="글자 크게">가+</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">화면 모드</span>
+          <div class="seg" id="theme-seg">
+            <button data-theme="auto">자동</button>
+            <button data-theme="light">라이트</button>
+            <button data-theme="dark">다크</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 

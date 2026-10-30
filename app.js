@@ -531,7 +531,9 @@ async function renderMonth() {
   grid.style.setProperty('--rows', weeks);
   const cellH = (grid.clientHeight || 600) / weeks;
   const anyDigest = Array.from({ length: weeks * 7 }, (_, i) => digests.get(ymd(addDays(start, i)))).some(Boolean);
-  const maxChips = Math.max(1, Math.floor((cellH - 34 - (anyDigest ? 17 : 0)) / 17));
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const chipH = rem * 0.94 + 2;
+  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.15 - (anyDigest ? chipH : 0)) / chipH));
   const evs = events.cached(start, end);
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
@@ -670,14 +672,23 @@ function setTransform(ctx) {
   ctx.setTransform(k, 0, 0, k, 0, 0);
 }
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// 다크 모드에서는 검은 잉크를 밝게 보여줌 (저장되는 색은 그대로). AI 변환 이미지는 항상 밝은 바탕
+let darkInk = false;
+const DARK_INK = { '#1f2328': '#e8eaed' };
+const inkColor = (c) => (darkInk && DARK_INK[c]) || c;
+
 function drawPaper(ctx) {
   ctx.save();
-  ctx.strokeStyle = '#eef0f3';
+  ctx.strokeStyle = cssVar('--paper-line');
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let y = 70; y < pad.note.height; y += 50) { ctx.moveTo(40, y); ctx.lineTo(PAGE_W - 40, y); }
   ctx.stroke();
-  ctx.strokeStyle = '#cfd4db';
+  ctx.strokeStyle = cssVar('--page-break');
   ctx.setLineDash([10, 10]);
   ctx.beginPath();
   for (let y = PAGE_H; y < pad.note.height; y += PAGE_H) { ctx.moveTo(0, y); ctx.lineTo(PAGE_W, y); }
@@ -706,7 +717,7 @@ function drawStroke(ctx, s, live = false) {
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.strokeStyle = ctx.fillStyle = s.color;
+  ctx.strokeStyle = ctx.fillStyle = inkColor(s.color);
   if (s.tool === 'hl') {
     const q = smoothPoints(uniquePoints(p), 0.5);
     ctx.globalAlpha = 0.35;
@@ -783,6 +794,7 @@ function inkPoints(s) {
 }
 
 function redraw() {
+  darkInk = cssVar('--is-dark') === '1';
   setTransform(pad.ctx);
   drawPaper(pad.ctx);
   for (const s of pad.note.strokes) drawStroke(pad.ctx, s);
@@ -1196,7 +1208,10 @@ function noteImage(note) {
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, c.width, c.height);
   ctx.setTransform(k, 0, 0, k, -x0 * k, -y0 * k);
+  const wasDark = darkInk;
+  darkInk = false;
   for (const s of strokes) drawStroke(ctx, s);
+  darkInk = wasDark;
   return c.toDataURL('image/png').split(',')[1];
 }
 
@@ -1545,6 +1560,42 @@ async function refreshInBackground() {
   } catch (e) { handleErr(e); }
 }
 
+// ---------- 설정: 글자 크기 · 화면 모드
+const UI_SCALES = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
+const settings = {
+  scale: store.get('uiScale', 1),
+  theme: store.get('theme', 'auto'),
+  apply() {
+    const root = document.documentElement;
+    root.style.setProperty('--ui-scale', this.scale);
+    if (this.theme === 'auto') delete root.dataset.theme;
+    else root.dataset.theme = this.theme;
+    $('#font-size-label').textContent = Math.round(this.scale * 100) + '%';
+    $('#font-down').disabled = this.scale <= UI_SCALES[0];
+    $('#font-up').disabled = this.scale >= UI_SCALES[UI_SCALES.length - 1];
+    document.querySelectorAll('#theme-seg button').forEach((b) => b.classList.toggle('active', b.dataset.theme === this.theme));
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', cssVar('--card') || '#ffffff');
+    relayout();
+  },
+  step(dir) {
+    let i = UI_SCALES.findIndex((v) => v >= this.scale - 0.001);
+    if (i < 0) i = UI_SCALES.indexOf(1);
+    this.scale = UI_SCALES[Math.max(0, Math.min(UI_SCALES.length - 1, i + dir))];
+    store.set('uiScale', this.scale);
+    this.apply();
+  },
+  setTheme(t) {
+    this.theme = t;
+    store.set('theme', t);
+    this.apply();
+  },
+};
+
+function relayout() {
+  if (state.view === 'day') layoutPad();
+  else renderMonth();
+}
+
 // ---------- 시작
 function bind() {
   $('#prev-month').onclick = () => shiftMonth(-1);
@@ -1558,6 +1609,20 @@ function bind() {
   $('#prev-day').onclick = () => shiftDay(-1);
   $('#next-day').onclick = () => shiftDay(1);
   $('#auth-btn').onclick = onAuthClick;
+
+  // 설정 메뉴
+  const panel = $('#settings'), sbtn = $('#settings-btn');
+  const toggleSettings = (open) => {
+    panel.classList.toggle('hidden', !open);
+    sbtn.setAttribute('aria-expanded', String(open));
+  };
+  sbtn.onclick = (e) => { e.stopPropagation(); toggleSettings(panel.classList.contains('hidden')); };
+  panel.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => toggleSettings(false));
+  $('#font-down').onclick = () => settings.step(-1);
+  $('#font-up').onclick = () => settings.step(1);
+  document.querySelectorAll('#theme-seg button').forEach((b) => { b.onclick = () => settings.setTheme(b.dataset.theme); });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => settings.theme === 'auto' && settings.apply());
 
   // 1시간 로그인 만료 후 다음 탭에서 자동으로 다시 연결 (팝업이 잠깐 떴다 닫힘)
   let reconnecting = false;
@@ -1687,6 +1752,7 @@ function bind() {
 async function init() {
   auth.init();
   bind();
+  settings.apply();
   await notes.loadLocal();
   updateAuthUI();
   const openToday = new URLSearchParams(location.search).get('open') === 'today';
