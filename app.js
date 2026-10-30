@@ -637,6 +637,33 @@ function shiftMonth(n) {
   renderMonth();
 }
 
+// 달 넘김 모션: 지금 달이 옆으로 빠지고 새 달이 반대쪽에서 들어옴 (손가락으로 끌던 위치에서 이어짐)
+let monthAnimating = false;
+function animateMonth(dir) {
+  const grid = $('#grid');
+  if (monthAnimating) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    grid.style.transform = '';
+    shiftMonth(dir);
+    return;
+  }
+  monthAnimating = true;
+  const w = grid.clientWidth;
+  grid.style.transition = 'transform .18s ease-in, opacity .18s ease-in';
+  grid.style.transform = `translateX(${dir > 0 ? -w : w}px)`;
+  grid.style.opacity = '0.2';
+  setTimeout(() => {
+    shiftMonth(dir);
+    grid.style.transition = 'none';
+    grid.style.transform = `translateX(${dir > 0 ? w * 0.6 : -w * 0.6}px)`;
+    void grid.offsetWidth;
+    grid.style.transition = 'transform .24s ease-out, opacity .24s ease-out';
+    grid.style.transform = '';
+    grid.style.opacity = '';
+    setTimeout(() => { grid.style.transition = ''; monthAnimating = false; }, 250);
+  }, 180);
+}
+
 // ---------- 하루 화면 (필기)
 function isIPad() {
   return /iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
@@ -1074,6 +1101,7 @@ async function openDay(ds, { push = true } = {}) {
   $('#month-nav').classList.add('hidden');
   $('#day-view').classList.remove('hidden');
   $('#day-nav').classList.remove('hidden');
+  if (isNarrow()) setPanel(false);
   const d = parseYmd(ds);
   $('#day-title').textContent = dayTitle(d);
   $('#ev-title').value = '';
@@ -1123,7 +1151,32 @@ async function closeDay() {
 }
 
 function shiftDay(n) {
-  openDay(ymd(addDays(parseYmd(state.date), n)));
+  const pw = $('.page-wrap');
+  pw.classList.remove('in-left', 'in-right');
+  openDay(ymd(addDays(parseYmd(state.date), n))).then(() => {
+    void pw.offsetWidth;
+    pw.classList.add(n > 0 ? 'in-left' : 'in-right');
+  });
+}
+
+// 일정·요약 패널: 넓은 화면은 왼쪽 패널(기본 보임), 좁은 화면은 아래 시트(기본 숨김)
+const isNarrow = () => window.matchMedia('(max-width: 899px)').matches;
+function setPanel(visible) {
+  const body = $('.day-body');
+  const toggled = isNarrow() ? visible : !visible;
+  if (body.classList.contains('panel-toggled') === toggled) return;
+  body.classList.toggle('panel-toggled', toggled);
+  if (!isNarrow()) { store.set('panelHidden', !visible); layoutPad(); }
+  syncPanelButton();
+}
+function panelVisible() {
+  const toggled = $('.day-body').classList.contains('panel-toggled');
+  return isNarrow() ? toggled : !toggled;
+}
+function syncPanelButton() {
+  const b = $('#panel-toggle'), v = panelVisible();
+  b.classList.toggle('on', v);
+  b.setAttribute('aria-expanded', String(v));
 }
 
 async function renderDayEvents() {
@@ -1134,6 +1187,7 @@ async function renderDayEvents() {
     if (state.date !== ds) return;
     const evs = events.on(all, day);
     $('#events-summary').textContent = evs.length ? `일정 ${evs.length}개` : '일정';
+    $('#panel-toggle').textContent = evs.length ? `일정 ${evs.length} · 요약` : '일정·요약';
     if (!evs.length) { list.replaceChildren(el('li', 'muted', '일정이 없어요')); return; }
     list.replaceChildren(...evs.map((ev) => {
       const li = el('li');
@@ -1623,12 +1677,15 @@ function relayout() {
 
 // ---------- 시작
 function bind() {
-  $('#prev-month').onclick = () => shiftMonth(-1);
-  $('#next-month').onclick = () => shiftMonth(1);
+  $('#prev-month').onclick = () => animateMonth(-1);
+  $('#next-month').onclick = () => animateMonth(1);
   $('#today-btn').onclick = () => {
     const t = new Date();
-    state.month = new Date(t.getFullYear(), t.getMonth(), 1);
-    renderMonth();
+    const diff = (t.getFullYear() - state.month.getFullYear()) * 12 + t.getMonth() - state.month.getMonth();
+    if (diff === 0) return;
+    if (Math.abs(diff) === 1) return animateMonth(diff);
+    state.month = new Date(t.getFullYear(), t.getMonth() - Math.sign(diff), 1);
+    animateMonth(Math.sign(diff));
   };
   $('#back-btn').onclick = () => history.state?.day ? history.back() : closeDay();
   $('#prev-day').onclick = () => shiftDay(-1);
@@ -1660,14 +1717,45 @@ function bind() {
 
   // 달력: 날짜 탭 → 하루 화면, 좌우 스와이프 → 달 이동
   const grid = $('#grid');
-  let swipe = null, swiped = false;
-  grid.addEventListener('pointerdown', (e) => { swipe = { x: e.clientX, y: e.clientY }; swiped = false; });
-  grid.addEventListener('pointerup', (e) => {
-    if (!swipe) return;
-    const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
-    swipe = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { swiped = true; shiftMonth(dx < 0 ? 1 : -1); }
+  let drag = null, swiped = false;
+  grid.addEventListener('pointerdown', (e) => {
+    if (monthAnimating) return;
+    drag = { x: e.clientX, y: e.clientY, id: e.pointerId, t: Date.now(), active: false };
+    swiped = false;
   });
+  grid.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.active) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        drag.active = true;
+        try { grid.setPointerCapture(e.pointerId); } catch { /* 무시 */ }
+        grid.style.transition = 'none';
+      } else {
+        if (Math.abs(dy) > 12) drag = null;
+        return;
+      }
+    }
+    grid.style.transform = `translateX(${dx}px)`;
+    grid.style.opacity = String(1 - Math.min(0.5, Math.abs(dx) / grid.clientWidth));
+  });
+  const endDrag = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag;
+    drag = null;
+    if (!d.active) return;
+    swiped = true;
+    const dx = e.clientX - d.x;
+    const speed = Math.abs(dx) / Math.max(1, Date.now() - d.t);
+    if (Math.abs(dx) > grid.clientWidth * 0.18 || (Math.abs(dx) > 40 && speed > 0.5)) animateMonth(dx < 0 ? 1 : -1);
+    else {
+      grid.style.transition = 'transform .2s ease-out, opacity .2s ease-out';
+      grid.style.transform = '';
+      grid.style.opacity = '';
+    }
+  };
+  grid.addEventListener('pointerup', endDrag);
+  grid.addEventListener('pointercancel', endDrag);
   grid.addEventListener('click', (e) => {
     if (swiped) { swiped = false; return; }
     const cell = e.target.closest('.cell');
@@ -1735,6 +1823,15 @@ function bind() {
     saveSoon();
   });
 
+  // 일정·요약 패널
+  $('#panel-toggle').onclick = () => setPanel(!panelVisible());
+  $('#panel-close').onclick = () => setPanel(false);
+  if (store.get('panelHidden', false)) $('.day-body').classList.add('panel-toggled');
+  if (isNarrow()) $('.day-body').classList.remove('panel-toggled');
+  syncPanelButton();
+  // 시트가 열린 채로 필기장을 누르면 시트를 닫음
+  $('#page-scroll').addEventListener('pointerdown', () => { if (isNarrow() && panelVisible()) setPanel(false); }, true);
+
   // 일정 입력
   $('#ev-allday').onchange = (e) => $('#ev-times').classList.toggle('hidden', e.target.checked);
   $('#event-form').addEventListener('submit', onAddEvent);
@@ -1750,8 +1847,8 @@ function bind() {
       else if (e.key === 'Escape') $('#back-btn').click();
       else if (e.key === 'ArrowLeft') shiftDay(-1);
       else if (e.key === 'ArrowRight') shiftDay(1);
-    } else if (e.key === 'ArrowLeft') shiftMonth(-1);
-    else if (e.key === 'ArrowRight') shiftMonth(1);
+    } else if (e.key === 'ArrowLeft') animateMonth(-1);
+    else if (e.key === 'ArrowRight') animateMonth(1);
   });
 
   // 안드로이드 뒤로가기 → 달력
@@ -1760,10 +1857,18 @@ function bind() {
     else if (state.view === 'day') closeDay();
   });
 
-  let resizeTimer = null;
+  let resizeTimer = null, lastNarrow = isNarrow();
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => settings.apply(), 150);
+    resizeTimer = setTimeout(() => {
+      // 폴드를 접고 펼쳐 좁은/넓은 화면이 바뀌면 패널 상태를 그 화면 기본값으로
+      if (isNarrow() !== lastNarrow) {
+        lastNarrow = isNarrow();
+        $('.day-body').classList.toggle('panel-toggled', !lastNarrow && store.get('panelHidden', false));
+        syncPanelButton();
+      }
+      settings.apply();
+    }, 150);
   });
   window.addEventListener('online', () => { notes.flush(); refreshInBackground(); autoOcr.kick(); });
   window.addEventListener('offline', () => setStatus('offline'));

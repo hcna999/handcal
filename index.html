@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=15">
-<script src="config.js?v=15"></script>
+<link rel="stylesheet" href="style.css?v=17">
+<script src="config.js?v=17"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=15"></script>
-<script src="app.js?v=15" defer></script>
+<script src="vendor/perfect-freehand.js?v=17"></script>
+<script src="app.js?v=17" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -43,6 +43,7 @@
     <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
     <h1 id="day-title"></h1>
     <button id="next-day" class="arrow" aria-label="다음 날">›</button>
+    <button id="panel-toggle" class="pill" aria-expanded="false">일정·요약</button>
   </div>
   <div class="right">
     <span id="sync-status" class="status"></span>
@@ -99,7 +100,11 @@
       </div>
     </div>
     <div class="day-body">
-      <aside class="events-panel">
+      <aside class="events-panel" id="side-panel">
+      <div class="sheet-head">
+        <span class="sheet-grip" aria-hidden="true"></span>
+        <button id="panel-close" class="pill">닫기</button>
+      </div>
       <details id="events-panel" open>
         <summary id="events-summary">일정</summary>
         <ul id="event-list"></ul>
