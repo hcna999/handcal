@@ -532,8 +532,8 @@ async function renderMonth() {
   const cellH = (grid.clientHeight || 600) / weeks;
   const anyDigest = Array.from({ length: weeks * 7 }, (_, i) => digests.get(ymd(addDays(start, i)))).some(Boolean);
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  const chipH = rem * 1.02 + 2;
-  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.3 - (anyDigest ? chipH : 0)) / chipH));
+  const chipH = rem * 1.16 + 2;
+  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.2 - (anyDigest ? chipH : 0)) / chipH));
   const evs = events.cached(start, end);
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
