@@ -36,6 +36,9 @@ export default {
       } else if (url.pathname === '/naver/test' && req.method === 'GET') {
         await requireOwner(req, env);
         body = await naverTest(env);
+      } else if (url.pathname === '/naver/debug' && req.method === 'GET') {
+        await requireOwner(req, env);
+        body = await naverDebug(env);
       } else if (url.pathname === '/') {
         body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET };
       } else return json({ error: 'not_found' }, 404, cors);
@@ -198,7 +201,79 @@ async function naverTest(env) {
   const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
   const r = await naverEvents(env, start, end, true);
-  return { calendars: cals.map((c) => ({ name: c.name, color: c.color })), eventsThisMonth: r.events.length, sample: r.events.slice(0, 5), warnings: r.warnings };
+  return { calendars: cals.map((c) => ({ name: c.name, color: c.color })), eventsThisMonth: r.events.length, sample: r.events.slice(0, 5), stats: r.stats, warnings: r.warnings };
+}
+
+// 진단용: 첫 캘린더의 이번 달 REPORT 원본 응답 일부 (일정 제목 등 개인 내용이 보일 수 있음)
+async function naverDebug(env) {
+  calCache = null;
+  const cals = await calendars(env);
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const out = [];
+  for (const cal of cals.slice(0, 2)) {
+    try {
+      const x = await dav(env, 'REPORT', cal.href, reportQuery(fmtDav(start), fmtDav(end)), 1);
+      out.push({ calendar: cal.name, href: cal.href, length: x.length, responses: responses(x).length, head: x.slice(0, 1500) });
+    } catch (e) {
+      out.push({ calendar: cal.name, href: cal.href, error: e.message });
+    }
+  }
+  return { reports: out };
+}
+
+const fmtDav = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+
+const multigetQuery = (hrefs) =>
+  '<?xml version="1.0" encoding="utf-8"?><c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">' +
+  '<d:prop><d:getetag/><c:calendar-data/></d:prop>' +
+  hrefs.map((h) => `<d:href>${h.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</d:href>`).join('') +
+  '</c:calendar-multiget>';
+
+// 한 캘린더의 기간 내 VEVENT 수집. 네이버가 REPORT 응답에 본문(calendar-data)을 안 넣어주면
+// 주소(href)만 모아서 calendar-multiget으로 다시 받고, 그것도 안 되면 하나씩 GET
+async function fetchCalendarEvents(env, cal, start, end, stat) {
+  const x = await dav(env, 'REPORT', cal.href, reportQuery(fmtDav(start), fmtDav(end)), 1);
+  const vevents = [];
+  const missing = [];
+  const rs = responses(x);
+  stat.responses = rs.length;
+  for (const r of rs) {
+    const data = first(r, 'calendar-data');
+    if (data && /BEGIN:VCALENDAR/i.test(decodeXml(data))) vevents.push(...parseICS(decodeXml(data)));
+    else {
+      const h = hrefIn(r);
+      if (h && !/\/$/.test(h)) missing.push(h);
+    }
+  }
+  stat.inline = vevents.length;
+  stat.missing = missing.length;
+  for (let i = 0; i < missing.length; i += 50) {
+    const batch = missing.slice(i, i + 50);
+    let got = 0;
+    try {
+      const mx = await dav(env, 'REPORT', cal.href, multigetQuery(batch), 1);
+      for (const r of responses(mx)) {
+        const data = first(r, 'calendar-data');
+        if (data) { const v = parseICS(decodeXml(data)); vevents.push(...v); got += v.length; }
+      }
+    } catch (e) {
+      stat.multigetError = e.message;
+    }
+    if (!got) {
+      const base = davBase(env) + '/';
+      await Promise.all(batch.slice(0, 30).map(async (h) => {
+        try {
+          const r = await fetch(new URL(h, base).toString(), { headers: { Authorization: 'Basic ' + btoa(`${env.NAVER_ID}:${env.NAVER_APP_PASSWORD}`) } });
+          if (r.ok) vevents.push(...parseICS(await r.text()));
+        } catch {}
+      }));
+      stat.usedGet = true;
+    }
+  }
+  stat.vevents = vevents.length;
+  return vevents;
 }
 
 const eventCache = new Map();
@@ -211,26 +286,25 @@ async function naverEvents(env, startIso, endIso, noCache) {
 
   const tz = validTz(env.TIMEZONE) || 'Asia/Seoul';
   const cals = await calendars(env);
-  const fmt = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const warnings = [];
   const events = [];
+  const stats = [];
   await Promise.all(cals.map(async (cal) => {
+    const stat = { calendar: cal.name };
+    stats.push(stat);
     try {
-      const x = await dav(env, 'REPORT', cal.href, reportQuery(fmt(start), fmt(end)), 1);
-      const vevents = [];
-      for (const r of responses(x)) {
-        const data = first(r, 'calendar-data');
-        if (data) vevents.push(...parseICS(decodeXml(data)));
-      }
-      events.push(...expandEvents(vevents, cal, start.getTime(), end.getTime(), tz));
+      const vevents = await fetchCalendarEvents(env, cal, start, end, stat);
+      const ex = expandEvents(vevents, cal, start.getTime(), end.getTime(), tz);
+      stat.events = ex.length;
+      events.push(...ex);
     } catch (e) {
       if (e.code === 'naver_auth') throw e;
       warnings.push(`${cal.name}: ${e.message}`);
     }
   }));
-  const data = { events, warnings };
-  if (eventCache.size > 30) eventCache.clear();
-  eventCache.set(key, { at: Date.now(), data });
+  const data = { events, warnings, stats };
+  if (events.length && eventCache.size > 30) eventCache.clear();
+  if (events.length || warnings.length === 0) eventCache.set(key, { at: Date.now(), data });
   return data;
 }
 
@@ -239,7 +313,7 @@ const DAY = 86400e3;
 const WDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
 function parseICS(text) {
-  const lines = text.replace(/\r?\n[ \t]/g, '').split(/\r?\n/);
+  const lines = text.replace(/\r\n|\r/g, '\n').replace(/\n[ \t]/g, '').split('\n').map((l) => l.replace(/\s+$/, ''));
   const out = [];
   let cur = null, depth = 0;
   for (const line of lines) {
