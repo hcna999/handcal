@@ -217,3 +217,16 @@ canvas { display: block; touch-action: none; }
 #ocr-summary ul { margin: 0; padding-left: 18px; }
 .ocr-label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 #ocr-text { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 14px; line-height: 1.5; resize: vertical; background: #fff; }
+.digest {
+  margin-top: auto;
+  font-size: 11px;
+  line-height: 15px;
+  color: #4b5563;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  border-top: 1px dashed var(--line);
+  padding-top: 1px;
+}
+.digest-todo { color: var(--accent); font-weight: 600; }

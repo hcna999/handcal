@@ -530,7 +530,8 @@ async function renderMonth() {
   const grid = $('#grid');
   grid.style.setProperty('--rows', weeks);
   const cellH = (grid.clientHeight || 600) / weeks;
-  const maxChips = Math.max(1, Math.floor((cellH - 34) / 17));
+  const anyDigest = Array.from({ length: weeks * 7 }, (_, i) => digests.get(ymd(addDays(start, i)))).some(Boolean);
+  const maxChips = Math.max(1, Math.floor((cellH - 34 - (anyDigest ? 17 : 0)) / 17));
   const evs = events.cached(start, end);
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
@@ -597,6 +598,13 @@ async function renderMonth() {
       for (let l = visible; l < lanes.length; l++) if (lanes[l][col]) hidden++;
       if (hidden) cell.append(el('div', 'more', `+${hidden}개`));
     }
+    const dg = digests.get(ds);
+    if (dg?.text) {
+      const line = el('div', 'digest', dg.text);
+      if (dg.todos) line.prepend(el('span', 'digest-todo', `☐${dg.todos} `));
+      line.title = dg.text;
+      cell.append(line);
+    }
     frag.append(cell);
   }
   grid.replaceChildren(frag);
@@ -634,6 +642,7 @@ const pad = {
   active: null,
   scroll: null,
   rafPending: false,
+  lastEdit: 0,
   hover: null,
 };
 
@@ -968,8 +977,11 @@ async function saveNow() {
   clearTimeout(saveTimer);
   saveTimer = null;
   if (!state.date) return;
-  try { await notes.put(state.date, { ...pad.note, strokes: pad.note.strokes.slice() }); }
+  const date = state.date;
+  try { await notes.put(date, { ...pad.note, strokes: pad.note.strokes.slice() }); }
   catch (e) { handleErr(e); }
+  if (!pad.note.strokes.length) { autoOcr.drop(date); digests.remove(date); }
+  else if (needsOcr(pad.note)) { pad.lastEdit = Date.now(); autoOcr.touch(date); }
   if (!auth.connected()) setStatus();
 }
 
@@ -1029,6 +1041,7 @@ function dayTitle(d) {
 
 async function openDay(ds, { push = true } = {}) {
   await saveNow();
+  if (state.date && state.date !== ds) autoOcr.hurry(state.date);
   const fromMonth = state.view !== 'day';
   state.view = 'day';
   state.date = ds;
@@ -1071,6 +1084,7 @@ async function openDay(ds, { push = true } = {}) {
 
 async function closeDay() {
   await saveNow();
+  autoOcr.hurry(state.date);
   dayToken++;
   const d = parseYmd(state.date);
   state.view = 'month';
@@ -1154,8 +1168,13 @@ async function onAddEvent(ev) {
 }
 
 // ---------- 필기 → 글자 (중계 서버의 Gemini 사용)
-function noteImage() {
-  const strokes = pad.note.strokes;
+// 필기 상태를 짧은 문자열로: 바뀌었으면 다시 변환해야 함
+const inkSig = (note) => note.strokes.length + ':' + note.strokes.reduce((a, s) => a + s.points.length, 0);
+const needsOcr = (note) => !!note?.strokes?.length && (!note.ocr || (note.ocr.sig && note.ocr.sig !== inkSig(note)));
+const digestLine = (o) => (o.summary || (o.text || '').split('\n').find((l) => l.trim()) || '').trim().slice(0, 80);
+
+function noteImage(note) {
+  const strokes = note.strokes;
   if (!strokes.length) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const s of strokes) {
@@ -1181,13 +1200,192 @@ function noteImage() {
   return c.toDataURL('image/png').split(',')[1];
 }
 
+async function ocrRequest(image, date) {
+  // 서버가 끊지 못하는 경우를 대비해 화면 쪽에서도 시간 제한
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/ocr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image, date }),
+      signal: ctrl.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.message || 'HTTP ' + res.status);
+      err.code = data.error;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      const err = new Error('변환이 1분 안에 끝나지 않았어요');
+      err.code = 'gemini_timeout';
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 변환 결과를 노트에 저장하고 달력용 요약을 갱신. 그사이 필기가 바뀌었으면 false
+async function applyOcr(date, data, sig) {
+  const ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now(), sig };
+  if (state.date === date) {
+    if (inkSig(pad.note) !== sig) return false;
+    pad.note.ocr = ocr;
+    saveSoon();
+    renderOcr();
+  } else {
+    const note = await notes.get(date);
+    if (inkSig(note) !== sig) return false;
+    note.ocr = ocr;
+    await notes.put(date, note);
+  }
+  digests.set(date, { text: digestLine(ocr), todos: ocr.todos?.length || 0 });
+  if (state.view === 'month') renderMonth();
+  return true;
+}
+
+// 달력 칸에 보여줄 한 줄 요약. 드라이브의 digests.json으로 기기 간 동기화
+const digests = {
+  fileId: null,
+  syncing: null,
+  all() { return store.get('digests', {}); },
+  get(date) { const d = this.all()[date]; return d && !d.deleted ? d : null; },
+  set(date, d) {
+    const all = this.all();
+    all[date] = { ...d, at: Date.now() };
+    store.set('digests', all);
+    this.sync().catch(handleErr);
+  },
+  remove(date) {
+    if (!this.get(date)) return;
+    const all = this.all();
+    all[date] = { deleted: true, at: Date.now() };
+    store.set('digests', all);
+    this.sync().catch(handleErr);
+  },
+  sync() {
+    if (!auth.connected()) return Promise.resolve();
+    if (!this.syncing) this.syncing = this._sync().finally(() => { this.syncing = null; });
+    return this.syncing;
+  },
+  async _sync() {
+    if (!this.fileId) {
+      const fid = await drive.ensureFolder();
+      const q = encodeURIComponent(`'${fid}' in parents and name='digests.json' and trashed=false`);
+      this.fileId = (await gapi(`${DRIVE}?q=${q}&fields=files(id)`)).files[0]?.id || null;
+    }
+    let remote = {};
+    if (this.fileId) {
+      const d = await drive.read(this.fileId);
+      remote = (typeof d === 'string' ? JSON.parse(d) : d)?.days || {};
+    }
+    const merged = { ...remote };
+    for (const [k, v] of Object.entries(this.all())) if (!merged[k] || (v.at || 0) > (merged[k].at || 0)) merged[k] = v;
+    store.set('digests', merged);
+    if (JSON.stringify(merged) !== JSON.stringify(remote)) {
+      const payload = { v: 1, days: merged };
+      if (this.fileId) await drive.update(this.fileId, payload);
+      else this.fileId = (await drive.create('digests.json', payload)).id;
+    }
+  },
+};
+
+// 백그라운드 자동 변환: 필기를 멈추고 잠시 뒤 대기열에 넣고, Gemini가 붐비면 간격을 늘려 다시 시도
+const autoOcr = {
+  queue: new Set(store.get('ocrQueue', [])),
+  timers: new Map(),
+  retryAt: 0,
+  fails: 0,
+  running: false,
+  kickTimer: null,
+  IDLE_MS: 90000,
+  BACKOFF_MIN: [2, 5, 15, 30],
+  enabled() { return !!CFG.WORKER_URL && auth.connected(); },
+  save() { store.set('ocrQueue', [...this.queue]); },
+  // 필기가 바뀌면 호출: 일정 시간 더 손대지 않으면 대기열로
+  touch(date, delay = this.IDLE_MS) {
+    clearTimeout(this.timers.get(date));
+    this.timers.set(date, setTimeout(() => {
+      this.timers.delete(date);
+      this.queue.add(date);
+      this.save();
+      this.kick();
+    }, delay));
+  },
+  // 다른 날짜로 넘어가면 기다리던 날은 곧바로 처리
+  hurry(date) { if (this.timers.has(date)) this.touch(date, 5000); },
+  drop(date) {
+    clearTimeout(this.timers.get(date));
+    this.timers.delete(date);
+    if (this.queue.delete(date)) this.save();
+  },
+  // 최근 30일 안에 쓴 필기 중 변환이 안 된 것을 대기열에 추가
+  async scan() {
+    const since = Date.now() - 30 * 86400e3;
+    for (const d of notes.localDays) {
+      if (this.queue.has(d) || this.timers.has(d)) continue;
+      const note = await idb.get('note:' + d).catch(() => null);
+      if (note && (note.updated || 0) > since && needsOcr(note)) this.queue.add(d);
+    }
+    this.save();
+    this.kick();
+  },
+  kick(delay = 0) {
+    clearTimeout(this.kickTimer);
+    this.kickTimer = setTimeout(() => this.run(), Math.max(delay, this.retryAt - Date.now(), 0));
+  },
+  async run() {
+    if (this.running || !this.queue.size || !this.enabled() || !navigator.onLine) return;
+    if (Date.now() < this.retryAt) return this.kick();
+    this.running = true;
+    let later = 0;
+    try {
+      for (const d of [...this.queue]) {
+        if (this.timers.has(d)) continue; // 아직 쓰는 중
+        if (state.date === d && Date.now() - pad.lastEdit < this.IDLE_MS) { later = this.IDLE_MS; continue; }
+        const note = state.date === d ? pad.note : await notes.get(d);
+        if (!needsOcr(note)) { this.queue.delete(d); this.save(); continue; }
+        const sig = inkSig(note);
+        try {
+          const data = await ocrRequest(noteImage(note), d);
+          if (await applyOcr(d, data, sig)) { this.queue.delete(d); this.save(); }
+          this.fails = 0;
+        } catch (e) {
+          if (e.message === 'AUTH') break;
+          const busy = ['gemini_busy', 'gemini_timeout'].includes(e.code) || !e.status || e.status >= 500;
+          const mins = e.code === 'gemini_quota' ? 60 : busy ? this.BACKOFF_MIN[Math.min(this.fails, this.BACKOFF_MIN.length - 1)] : 30;
+          this.fails++;
+          this.retryAt = Date.now() + mins * 60000;
+          console.warn('자동 변환 보류', d, e.message, `${mins}분 뒤 재시도`);
+          break;
+        }
+      }
+    } finally {
+      this.running = false;
+      if (state.view === 'day') renderOcr();
+      if (this.queue.size) this.kick(later || 30000);
+    }
+  },
+};
+
 function renderOcr() {
   const o = pad.note.ocr;
-  $('#ocr-btn').textContent = o ? '다시 변환' : '글자로 변환';
+  $('#ocr-btn').textContent = o ? '다시 변환' : '지금 변환';
   $('#ocr-copy').classList.toggle('hidden', !o);
   $('#ocr-result').classList.toggle('hidden', !o);
-  $('#ocr-hint').classList.toggle('hidden', !!o);
-  if (!CFG.WORKER_URL) $('#ocr-hint').textContent = '중계 서버(WORKER_URL)를 연결하면 쓸 수 있어요.';
+  $('#ocr-hint').classList.toggle('hidden', !!o && !needsOcr(pad.note));
+  let hint = '필기를 멈추고 잠시 뒤 자동으로 글자로 바꾸고 요약해요.';
+  if (!CFG.WORKER_URL) hint = '중계 서버(WORKER_URL)를 연결하면 쓸 수 있어요.';
+  else if (state.date && autoOcr.queue.has(state.date) && autoOcr.retryAt > Date.now()) {
+    hint = `AI 서버가 붐벼서 ${new Date(autoOcr.retryAt).toTimeString().slice(0, 5)}쯤 다시 변환해요.`;
+  } else if (o && needsOcr(pad.note)) hint = '필기가 바뀌어서 잠시 뒤 다시 변환해요.';
+  $('#ocr-hint').textContent = hint;
   if (!o) return;
   const box = $('#ocr-summary');
   const parts = [];
@@ -1199,39 +1397,25 @@ function renderOcr() {
     parts.push(el('h3', null, title), ul);
   }
   box.replaceChildren(...parts);
-  $('#ocr-text').value = o.text || '';
+  if (document.activeElement !== $('#ocr-text')) $('#ocr-text').value = o.text || '';
 }
 
 async function runOcr() {
   if (!CFG.WORKER_URL) return toast('중계 서버를 먼저 연결해야 해요');
   if (!auth.connected()) return toast('먼저 구글 로그인을 해주세요');
-  const image = noteImage();
+  const image = noteImage(pad.note);
   if (!image) return toast('변환할 필기가 없어요');
-  const date = state.date, btn = $('#ocr-btn');
+  const date = state.date, sig = inkSig(pad.note), btn = $('#ocr-btn');
   btn.disabled = true;
-  btn.textContent = '변환 중…';
-  // 서버가 끊지 못하는 경우를 대비해 화면 쪽에서도 시간 제한
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);
   const started = Date.now();
+  btn.textContent = '변환 중…';
   const tick = setInterval(() => { btn.textContent = `변환 중… ${Math.round((Date.now() - started) / 1000)}초`; }, 1000);
   try {
-    const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/ocr`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image, date }),
-      signal: ctrl.signal,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
-    if (state.date !== date) return;
-    pad.note.ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now() };
-    saveSoon();
+    const data = await ocrRequest(image, date);
+    if (await applyOcr(date, data, sig)) autoOcr.drop(date);
   } catch (e) {
-    if (e.name === 'AbortError') toast('변환이 1분 안에 끝나지 않아 멈췄어요. 다시 시도해 주세요', 5000);
-    else handleErr(e);
+    handleErr(e);
   } finally {
-    clearTimeout(timer);
     clearInterval(tick);
     btn.disabled = false;
     if (state.date === date) renderOcr();
@@ -1333,9 +1517,11 @@ async function afterSignIn() {
   try {
     await notes.syncIndex();
     await memos.sync();
+    await digests.sync();
     events.reset();
     rerender();
     await notes.flush();
+    autoOcr.scan();
   } catch (e) { handleErr(e); }
 }
 
@@ -1351,9 +1537,11 @@ async function refreshInBackground() {
   try {
     await notes.refreshIndex(20000);
     await memos.sync();
+    await digests.sync();
     events.clear();
     rerender();
     if (notes.pending.size) notes.flush();
+    autoOcr.kick();
   } catch (e) { handleErr(e); }
 }
 
@@ -1487,7 +1675,7 @@ function bind() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => (state.view === 'day' ? layoutPad() : renderMonth()), 150);
   });
-  window.addEventListener('online', () => { notes.flush(); refreshInBackground(); });
+  window.addEventListener('online', () => { notes.flush(); refreshInBackground(); autoOcr.kick(); });
   window.addEventListener('offline', () => setStatus('offline'));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') saveNow();
