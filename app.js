@@ -967,7 +967,7 @@ function handleErr(e) {
   const msg = e?.message || String(e);
   if (msg === 'AUTH') {
     updateAuthUI();
-    toast('구글 연결이 만료됐어요. 오른쪽 위 "다시 연결"을 눌러주세요.', 4000);
+    toast('구글 연결이 만료됐어요. 화면을 아무 곳이나 누르면 다시 연결돼요.', 4000);
   } else if (msg === 'NO_CLIENT_ID') {
     toast('config.js에 구글 클라이언트 ID를 넣어야 동기화돼요. (README 참고)', 5000);
   } else if (msg === 'GIS_NOT_LOADED') {
@@ -1058,6 +1058,15 @@ function bind() {
   $('#prev-day').onclick = () => shiftDay(-1);
   $('#next-day').onclick = () => shiftDay(1);
   $('#auth-btn').onclick = onAuthClick;
+
+  // 1시간 로그인 만료 후 다음 탭에서 자동으로 다시 연결 (팝업이 잠깐 떴다 닫힘)
+  let reconnecting = false;
+  document.addEventListener('click', (e) => {
+    if (reconnecting || auth.signedIn() || !auth.wasSignedIn()) return;
+    if (e.target.closest('#auth-btn, canvas')) return;
+    reconnecting = true;
+    connect('').catch(handleErr).finally(() => { reconnecting = false; });
+  }, true);
 
   // 달력: 날짜 탭 → 하루 화면, 좌우 스와이프 → 달 이동
   const grid = $('#grid');
