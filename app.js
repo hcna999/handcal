@@ -615,6 +615,10 @@ function shiftMonth(n) {
 }
 
 // ---------- 하루 화면 (필기)
+function isIPad() {
+  return /iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
 const pad = {
   canvas: null, ctx: null, overlay: null, octx: null,
   scale: 1, dpr: 1,
@@ -623,7 +627,8 @@ const pad = {
   tool: 'pen',
   colors: store.get('colors', { pen: COLORS[0], hl: '#facc15' }),
   sizeIdx: store.get('sizeIdx', 1),
-  fingerDraw: store.get('fingerDraw', true),
+  fingerDraw: store.get('fingerDraw', !isIPad()),
+  recentTouch: [],
   penSeen: store.get('penSeen', false),
   active: null,
   scroll: null,
@@ -685,96 +690,7 @@ function smoothPoints(p, k = 0.45, scale = 4) {
   return out;
 }
 
-function strokeRadii(p, size) {
-  const realPressure = p.some((q) => q[2] !== 0.5);
-  const n = p.length, r = new Array(n);
-  let pr = realPressure ? p[0][2] : 0.6;
-  for (let i = 0; i < n; i++) {
-    let target;
-    if (realPressure) target = p[i][2];
-    else {
-      // 압력이 없으면 빠르게 그을수록 살짝 가늘게
-      const d = i ? Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]) : 0;
-      target = Math.max(0.5, 0.75 - d / (size * 10));
-    }
-    pr += (target - pr) * (realPressure ? 0.35 : 0.2);
-    r[i] = (size * (0.35 + 0.95 * pr)) / 2;
-  }
-  // 시작·끝을 살짝 가늘게 (펜을 대고 뗄 때 자연스럽게)
-  let acc = 0;
-  const taper = size * 2.5;
-  for (let i = 1; i < n && acc < taper; i++) {
-    acc += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
-    r[i - 1] *= 0.55 + 0.45 * Math.min(1, acc / taper);
-  }
-  acc = 0;
-  for (let i = n - 2; i >= 0 && acc < taper; i--) {
-    acc += Math.hypot(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
-    r[i + 1] *= realPressure ? 1 : 0.6 + 0.4 * Math.min(1, acc / taper);
-  }
-  return r;
-}
-
-// 점 사이를 곡선으로 촘촘히 채움 (빠르게 그어 점이 듬성듬성해도 매끈하게)
-function densify(p, step = 1.2) {
-  if (p.length < 3) return p;
-  const out = [p[0]];
-  const lerp = (a, b, t) => a + (b - a) * t;
-  let s0 = p[0];
-  for (let i = 1; i < p.length; i++) {
-    const last = i === p.length - 1;
-    const c = p[i];
-    const e = last ? c : [(c[0] + p[i + 1][0]) / 2, (c[1] + p[i + 1][1]) / 2, (c[2] + p[i + 1][2]) / 2];
-    const len = Math.hypot(c[0] - s0[0], c[1] - s0[1]) + Math.hypot(e[0] - c[0], e[1] - c[1]);
-    const k = Math.max(1, Math.ceil(len / step));
-    for (let j = 1; j <= k; j++) {
-      const t = j / k;
-      if (last) { out.push([lerp(s0[0], c[0], t), lerp(s0[1], c[1], t), lerp(s0[2], c[2], t)]); continue; }
-      const u = 1 - t;
-      out.push([u * u * s0[0] + 2 * u * t * c[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * c[1] + t * t * e[1], lerp(lerp(s0[2], c[2], t), lerp(c[2], e[2], t), t)]);
-    }
-    s0 = e;
-    if (last) break;
-  }
-  return out;
-}
-
-function fillPenStroke(ctx, raw, size) {
-  const sm = smoothPoints(raw);
-  const r0 = strokeRadii(sm, size);
-  if (sm.length === 1) {
-    ctx.beginPath();
-    ctx.arc(sm[0][0], sm[0][1], r0[0], 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-  // 굵기를 세 번째 값에 실어 같이 촘촘히 보간
-  const p = densify(sm.map((q, i) => [q[0], q[1], r0[i]]));
-  const n = p.length;
-  const L = [], R = [];
-  let a0 = 0, a1 = 0;
-  for (let i = 0; i < n; i++) {
-    const a = p[Math.max(0, i - 2)], b = p[Math.min(n - 1, i + 2)];
-    let dx = b[0] - a[0], dy = b[1] - a[1];
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    if (i === 0) a0 = Math.atan2(dy, dx);
-    if (i === n - 1) a1 = Math.atan2(dy, dx);
-    const r = p[i][2];
-    L.push([p[i][0] - dy * r, p[i][1] + dx * r]);
-    R.push([p[i][0] + dy * r, p[i][1] - dx * r]);
-  }
-  ctx.beginPath();
-  ctx.moveTo(L[0][0], L[0][1]);
-  for (let i = 1; i < n; i++) ctx.lineTo(L[i][0], L[i][1]);
-  ctx.arc(p[n - 1][0], p[n - 1][1], p[n - 1][2], a1 + Math.PI / 2, a1 - Math.PI / 2, true);
-  for (let i = n - 1; i >= 0; i--) ctx.lineTo(R[i][0], R[i][1]);
-  ctx.arc(p[0][0], p[0][1], p[0][2], a0 - Math.PI / 2, a0 - Math.PI * 1.5, true);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawStroke(ctx, s) {
+function drawStroke(ctx, s, live = false) {
   const p = s.points;
   if (!p.length) return;
   ctx.save();
@@ -794,9 +710,55 @@ function drawStroke(ctx, s) {
     if (q.length > 1) ctx.lineTo(q[q.length - 1][0], q[q.length - 1][1]);
     ctx.stroke();
   } else {
-    fillPenStroke(ctx, s.predicted ? p.concat(s.predicted) : p, s.size);
+    ctx.fill(penPath(s, live));
   }
   ctx.restore();
+}
+
+// 펜 획을 매끄러운 외곽선(Path2D)으로 변환. 완성된 획은 캐시
+const pathCache = new WeakMap();
+function penPath(s, live) {
+  if (!live && pathCache.has(s)) return pathCache.get(s);
+  const pts = inkPoints(s);
+  const outline = window.PerfectFreehand.getStroke(live ? pts.concat(pad.active?.predicted || []) : pts, {
+    size: s.size * 1.2,
+    thinning: 0.5,
+    smoothing: 0.6,
+    streamline: 0.45,
+    simulatePressure: false,
+    last: !live,
+  });
+  const path = new Path2D();
+  if (outline.length) {
+    path.moveTo(outline[0][0], outline[0][1]);
+    for (let i = 1; i < outline.length; i++) {
+      const [x0, y0] = outline[i], [x1, y1] = outline[(i + 1) % outline.length];
+      path.quadraticCurveTo(x0, y0, (x0 + x1) / 2, (y0 + y1) / 2);
+    }
+    path.closePath();
+  }
+  if (!live) pathCache.set(s, path);
+  return path;
+}
+
+// 압력값 보정: 애플 펜슬은 가볍게 쓰면 0.05~0.2 정도라 너무 가늘어지므로 범위를 넓힘
+function inkPoints(s) {
+  const p = s.points;
+  const isPen = s.pen ?? !p.every((q) => q[2] === 0.5);
+  if (!isPen) return p.map((q) => [q[0], q[1], 0.5]);
+  const pr = p.map((q) => q[2]);
+  // 예전 버전은 압력 0을 0.5로 잘못 저장했음 → 그런 값은 주변 압력으로 채움
+  if (s.pen === undefined) {
+    const real = pr.filter((v) => v !== 0.5).sort((x, y) => x - y);
+    if (real.length && real[real.length >> 1] < 0.35) {
+      let lastReal = real[real.length >> 1];
+      for (let i = 0; i < pr.length; i++) {
+        if (pr[i] === 0.5) pr[i] = lastReal;
+        else lastReal = pr[i];
+      }
+    }
+  }
+  return p.map((q, i) => [q[0], q[1], Math.min(1, 0.25 + pr[i] * 1.6)]);
 }
 
 function redraw() {
@@ -809,7 +771,7 @@ function redraw() {
 function renderOverlay() {
   pad.rafPending = false;
   setTransform(pad.octx);
-  if (pad.active?.stroke) drawStroke(pad.octx, pad.active.stroke);
+  if (pad.active?.stroke) drawStroke(pad.octx, pad.active.stroke, true);
   const h = pad.hover;
   if (h && (pad.tool === 'eraser' || pad.active?.erase)) {
     pad.octx.beginPath();
@@ -833,7 +795,12 @@ function toPage(e) {
 
 function makePoint(e) {
   const [x, y] = toPage(e);
-  const pr = e.pointerType === 'pen' ? (e.pressure || 0.5) : 0.5;
+  let pr = 0.5;
+  if (e.pointerType === 'pen') {
+    // 펜이 닿는 순간/떼는 순간에는 압력이 0으로 오므로 직전 값을 사용
+    const last = pad.active?.stroke?.points.at(-1);
+    pr = e.pressure > 0 ? e.pressure : last ? last[2] : 0.15;
+  }
   return [Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(pr * 100) / 100];
 }
 
@@ -884,23 +851,34 @@ function updateUndoUI() {
   $('#redo').disabled = !pad.redo.length;
 }
 
+function capture(id) {
+  try { pad.canvas.setPointerCapture(id); } catch { /* 이미 떨어진 포인터 */ }
+}
+
 function onPointerDown(e) {
-  if (e.pointerType === 'pen' && !pad.penSeen) {
-    pad.penSeen = true;
-    store.set('penSeen', true);
-    if (pad.fingerDraw) { setFingerDraw(false); toast('펜이 감지돼서 손가락은 화면 이동용으로 바꿨어요'); }
+  if (e.pointerType === 'pen') {
+    // 손바닥이 먼저 닿아 그려지던 획은 취소
+    if (pad.active?.pointerType === 'touch') { pad.active = null; requestOverlay(); }
+    if (!pad.penSeen) {
+      pad.penSeen = true;
+      store.set('penSeen', true);
+      dropRecentTouchStrokes();
+      if (pad.fingerDraw) { setFingerDraw(false); toast('펜이 감지돼서 손가락은 화면 이동용으로 바꿨어요'); }
+    }
   }
   if (e.pointerType === 'touch' && !pad.fingerDraw) {
     if (!pad.scroll) {
       pad.scroll = { id: e.pointerId, x: e.clientX, y: e.clientY };
-      pad.canvas.setPointerCapture(e.pointerId);
+      capture(e.pointerId);
     }
     return;
   }
   const eraserButton = e.button === 5 || (e.buttons & 32);
   if (pad.active || pad.loading || (e.button > 0 && !eraserButton)) return;
+  // 넓게 닿는 터치는 손바닥으로 간주
+  if (e.pointerType === 'touch' && Math.max(e.width || 0, e.height || 0) > 40) return;
   e.preventDefault();
-  pad.canvas.setPointerCapture(e.pointerId);
+  capture(e.pointerId);
   const pt = makePoint(e);
   pad.hover = pt;
   if (pad.tool === 'eraser' || eraserButton) {
@@ -909,7 +887,9 @@ function onPointerDown(e) {
     requestOverlay();
   } else {
     const tool = pad.tool;
-    pad.active = { id: e.pointerId, stroke: { tool, color: pad.colors[tool], size: SIZES[tool][pad.sizeIdx], points: [pt] } };
+    const stroke = { tool, color: pad.colors[tool], size: SIZES[tool][pad.sizeIdx], points: [pt] };
+    if (e.pointerType === 'pen') stroke.pen = true;
+    pad.active = { id: e.pointerId, pointerType: e.pointerType, stroke, predicted: [] };
     requestOverlay();
   }
 }
@@ -938,10 +918,9 @@ function onPointerMove(e) {
     }
     pad.hover = pt;
   }
-  // 손이 앞서가는 만큼 예측점을 잠깐 그려서 반응을 빠르게 (저장은 안 함)
-  if (pad.active.stroke && pad.active.stroke.tool !== 'hl') {
+  if (pad.active.stroke) {
     const pred = e.getPredictedEvents?.() || [];
-    pad.active.stroke.predicted = pred.length ? pred.slice(0, 2).map(makePoint) : null;
+    pad.active.predicted = pred.slice(0, 2).map(makePoint);
   }
   requestOverlay();
 }
@@ -954,8 +933,8 @@ function onPointerUp(e) {
   if (a.erase) {
     if (a.changed) { pushUndo(a.before); saveSoon(); }
   } else {
-    delete a.stroke.predicted;
     pushUndo();
+    if (a.pointerType === 'touch') pad.recentTouch.push({ stroke: a.stroke, at: Date.now() });
     pad.note.strokes.push(a.stroke);
     drawStroke(pad.ctx, a.stroke);
     saveSoon();
@@ -977,6 +956,17 @@ async function saveNow() {
   try { await notes.put(state.date, { ...pad.note, strokes: pad.note.strokes.slice() }); }
   catch (e) { handleErr(e); }
   if (!auth.connected()) setStatus();
+}
+
+// 펜을 처음 쓰기 직전 몇 초 사이에 손으로 그려진 획(손바닥 오작동)을 지움
+function dropRecentTouchStrokes() {
+  const recent = new Set(pad.recentTouch.filter((r) => Date.now() - r.at < 5000).map((r) => r.stroke));
+  pad.recentTouch = [];
+  if (!recent.size) return;
+  pushUndo();
+  pad.note.strokes = pad.note.strokes.filter((s) => !recent.has(s));
+  redraw();
+  saveSoon();
 }
 
 function setFingerDraw(v) {
