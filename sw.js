@@ -1,5 +1,5 @@
 // 앱 파일을 캐시해서 오프라인에서도 열리게 함 (네트워크 우선)
-const CACHE = 'handcal-v3';
+const CACHE = 'handcal-v4';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

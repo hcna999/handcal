@@ -1,11 +1,7 @@
 'use strict';
 
 const CFG = window.APP_CONFIG || {};
-const SCOPES = [
-  'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/calendar.readonly',
-].join(' ');
+const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file';
 const FOLDER_NAME = '필기캘린더';
 const PAGE_W = 1000;
 const PAGE_H = 1414; // A4 비율
@@ -72,47 +68,115 @@ const idb = (() => {
 })();
 
 // ---------- 구글 로그인
+// WORKER_URL이 있으면 서버를 통해 로그인을 계속 유지하고, 없으면 1시간짜리 토큰만 사용
 const auth = {
   token: null,
   expires: 0,
+  refreshing: null,
   init() {
     const saved = store.get('auth', null);
     if (saved && saved.expires > Date.now()) { this.token = saved.token; this.expires = saved.expires; }
   },
   signedIn() { return !!this.token && this.expires > Date.now(); },
+  canRefresh() { return !!CFG.WORKER_URL && !!store.get('refresh', null); },
+  connected() { return this.signedIn() || this.canRefresh(); },
   wasSignedIn() { return !!CFG.GOOGLE_CLIENT_ID && store.get('wasSignedIn', false); },
+  setToken(t) {
+    this.token = t.access_token;
+    this.expires = Date.now() + (Number(t.expires_in) - 60) * 1000;
+    store.set('auth', { token: this.token, expires: this.expires });
+    store.set('wasSignedIn', true);
+  },
   request(prompt) {
     return new Promise((resolve, reject) => {
       if (!CFG.GOOGLE_CLIENT_ID) return reject(new Error('NO_CLIENT_ID'));
       if (!window.google?.accounts?.oauth2) return reject(new Error('GIS_NOT_LOADED'));
-      const client = google.accounts.oauth2.initTokenClient({
+      const error_callback = (e) => reject(new Error(e.type || 'popup_error'));
+      if (CFG.WORKER_URL) {
+        google.accounts.oauth2.initCodeClient({
+          client_id: CFG.GOOGLE_CLIENT_ID,
+          scope: SCOPES,
+          ux_mode: 'popup',
+          callback: async (r) => {
+            if (r.error) return reject(new Error(r.error));
+            try {
+              const t = await worker('/auth/exchange', { method: 'POST', body: JSON.stringify({ code: r.code }) });
+              this.setToken(t);
+              if (t.refresh_token) store.set('refresh', t.refresh_token);
+              resolve();
+            } catch (e) { reject(e); }
+          },
+          error_callback,
+        }).requestCode();
+        return;
+      }
+      google.accounts.oauth2.initTokenClient({
         client_id: CFG.GOOGLE_CLIENT_ID,
         scope: SCOPES,
         callback: (r) => {
           if (r.error) return reject(new Error(r.error));
-          this.token = r.access_token;
-          this.expires = Date.now() + (Number(r.expires_in) - 60) * 1000;
-          store.set('auth', { token: this.token, expires: this.expires });
-          store.set('wasSignedIn', true);
+          this.setToken(r);
           resolve();
         },
-        error_callback: (e) => reject(new Error(e.type || 'popup_error')),
-      });
-      client.requestAccessToken({ prompt });
+        error_callback,
+      }).requestAccessToken({ prompt });
     });
+  },
+  // 토큰이 만료됐으면 서버를 통해 조용히 새로 받음
+  async ensure() {
+    if (this.signedIn()) return true;
+    if (!this.canRefresh()) return false;
+    if (!this.refreshing) {
+      this.refreshing = worker('/auth/refresh', { method: 'POST', body: JSON.stringify({ refresh_token: store.get('refresh') }) })
+        .then((t) => { this.setToken(t); return true; })
+        .catch((e) => {
+          if (e.status === 401) store.del('refresh');
+          else if (!navigator.onLine || !e.status) throw e;
+          return false;
+        })
+        .finally(() => { this.refreshing = null; });
+    }
+    return this.refreshing;
   },
   expire() { this.token = null; store.del('auth'); },
   signOut() {
     if (this.token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(this.token, () => {});
     this.expire();
+    store.del('refresh');
     store.set('wasSignedIn', false);
   },
 };
 
+async function worker(path, opts = {}) {
+  const res = await fetch(CFG.WORKER_URL.replace(/\/$/, '') + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || 'HTTP ' + res.status);
+    err.status = res.status;
+    err.code = data.error;
+    throw err;
+  }
+  return data;
+}
+
+// 구글 토큰을 붙여 요청. 401이면 한 번 갱신 후 재시도
+async function authFetch(url, opts = {}, retry = true) {
+  if (!(await auth.ensure())) { updateAuthUI(); throw new Error('AUTH'); }
+  const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + auth.token } });
+  if (res.status === 401) {
+    auth.expire();
+    if (retry && auth.canRefresh()) return authFetch(url, opts, false);
+    updateAuthUI();
+    throw new Error('AUTH');
+  }
+  return res;
+}
+
 async function gapi(url, opts = {}) {
-  if (!auth.signedIn()) throw new Error('AUTH');
-  const res = await fetch(url, { ...opts, headers: { Authorization: 'Bearer ' + auth.token, ...(opts.headers || {}) } });
-  if (res.status === 401) { auth.expire(); updateAuthUI(); throw new Error('AUTH'); }
+  const res = await authFetch(url, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
   if (res.status === 204) return null;
   const text = await res.text();
@@ -218,7 +282,7 @@ const notes = {
   },
 
   async refreshIndex(maxAgeMs) {
-    if (!auth.signedIn() || Date.now() - this.lastSync < maxAgeMs) return false;
+    if (!auth.connected() || Date.now() - this.lastSync < maxAgeMs) return false;
     await this.syncIndex();
     return true;
   },
@@ -226,7 +290,7 @@ const notes = {
   async get(d) {
     const local = await idb.get('note:' + d).catch(() => null);
     const r = this.remote.get(d);
-    if (auth.signedIn() && r && !this.pending.has(d) && (!local || local.remoteTime !== r.modifiedTime)) {
+    if (auth.connected() && r && !this.pending.has(d) && (!local || local.remoteTime !== r.modifiedTime)) {
       try {
         const data = await drive.read(r.id);
         const note = normalize(typeof data === 'string' ? JSON.parse(data) : data);
@@ -252,7 +316,7 @@ const notes = {
   },
 
   async flush() {
-    if (!auth.signedIn()) { setStatus(); return; }
+    if (!auth.connected()) { setStatus(); return; }
     if (!navigator.onLine) { setStatus('offline'); return; }
     if (this.flushing) { this.again = true; return; }
     this.flushing = true;
@@ -294,67 +358,120 @@ const notes = {
 let flushTimer = null;
 function scheduleFlush() {
   clearTimeout(flushTimer);
-  if (auth.signedIn()) setStatus('saving');
+  if (auth.connected()) setStatus('saving');
   flushTimer = setTimeout(() => notes.flush(), 1500);
 }
 
-// ---------- 일정 (로그인 시 구글 캘린더, 아니면 기기 저장)
-const CAL = 'https://www.googleapis.com/calendar/v3';
+// ---------- 일정
+// 메모 일정: 앱에서 직접 적는 일정. 드라이브의 events.json으로 기기 간 동기화
+const memos = {
+  fileId: null,
+  syncing: null,
+  all() { return store.get('localEvents', []); },
+  save(list) { store.set('localEvents', list); },
+  visible(s, e) {
+    return this.all()
+      .filter((x) => !x.deleted)
+      .map((x) => ({ ...x, start: new Date(x.start), end: new Date(x.end), color: '#2563eb', editable: true, source: 'memo' }))
+      .filter((x) => x.start < e && x.end > s);
+  },
+  add(ev) {
+    const list = this.all();
+    list.push({ id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: ev.title, allDay: ev.allDay, start: ev.start.toISOString(), end: ev.end.toISOString(), updated: Date.now() });
+    this.save(list);
+    this.sync().catch(handleErr);
+  },
+  remove(id) {
+    this.save(this.all().map((x) => (x.id === id ? { id, deleted: true, updated: Date.now() } : x)));
+    this.sync().catch(handleErr);
+  },
+  sync() {
+    if (!auth.connected()) return Promise.resolve();
+    if (!this.syncing) this.syncing = this._sync().finally(() => { this.syncing = null; });
+    return this.syncing;
+  },
+  async _sync() {
+    if (!this.fileId) {
+      const fid = await drive.ensureFolder();
+      const q = encodeURIComponent(`'${fid}' in parents and name='events.json' and trashed=false`);
+      const r = await gapi(`${DRIVE}?q=${q}&fields=files(id)`);
+      this.fileId = r.files[0]?.id || null;
+    }
+    let remote = [];
+    if (this.fileId) {
+      const d = await drive.read(this.fileId);
+      const data = typeof d === 'string' ? JSON.parse(d) : d;
+      remote = Array.isArray(data?.events) ? data.events : [];
+    }
+    const byId = new Map();
+    for (const x of [...remote, ...this.all()]) {
+      const cur = byId.get(x.id);
+      if (!cur || (x.updated || 0) > (cur.updated || 0)) byId.set(x.id, x);
+    }
+    const cutoff = Date.now() - 90 * 86400e3;
+    const merged = [...byId.values()].filter((x) => !x.deleted || x.updated > cutoff).sort((a, b) => (a.id < b.id ? -1 : 1));
+    const before = JSON.stringify(this.all());
+    this.save(merged);
+    const sortedRemote = [...remote].sort((a, b) => (a.id < b.id ? -1 : 1));
+    if (JSON.stringify(sortedRemote) !== JSON.stringify(merged)) {
+      const payload = { v: 1, events: merged };
+      if (this.fileId) await drive.update(this.fileId, payload);
+      else this.fileId = (await drive.create('events.json', payload)).id;
+    }
+    return before !== JSON.stringify(merged);
+  },
+};
+
+// 네이버 캘린더 (읽기 전용, 중계 서버 경유)
+const naver = {
+  enabled() { return !!CFG.WORKER_URL && auth.connected(); },
+  warned: false,
+  async load(s, e) {
+    const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/naver/events?start=${encodeURIComponent(s.toISOString())}&end=${encodeURIComponent(e.toISOString())}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.message || 'HTTP ' + res.status);
+      err.code = data.error;
+      throw err;
+    }
+    return (data.events || []).map((x) => ({
+      id: x.id,
+      title: x.title,
+      allDay: x.allDay,
+      start: x.allDay ? parseYmd(x.start) : new Date(x.start),
+      end: x.allDay ? parseYmd(x.end) : new Date(x.end),
+      color: x.color || '#03c75a',
+      calendar: x.calendar,
+      editable: false,
+      source: 'naver',
+    }));
+  },
+};
+
 const events = {
   cache: new Map(),
-  cals: null,
   key: (s, e) => ymd(s) + '_' + ymd(e),
   cached(s, e) { return this.cache.get(this.key(s, e)) || null; },
   clear() { this.cache.clear(); },
-  reset() { this.cache.clear(); this.cals = null; },
+  reset() { this.cache.clear(); },
 
   async load(s, e) {
-    const list = auth.signedIn() ? await this.loadGoogle(s, e) : this.loadLocal(s, e);
-    list.sort((a, b) => (b.allDay - a.allDay) || (a.start - b.start) || a.title.localeCompare(b.title));
-    this.cache.set(this.key(s, e), list);
-    return list;
-  },
-
-  async loadCals() {
-    if (this.cals) return this.cals;
-    const r = await gapi(`${CAL}/users/me/calendarList?fields=items(id,summary,backgroundColor,primary,selected,accessRole)`);
-    this.cals = (r.items || []).filter((c) => c.selected || c.primary);
-    return this.cals;
-  },
-
-  async loadGoogle(s, e) {
-    const cals = await this.loadCals();
-    const params = `timeMin=${encodeURIComponent(s.toISOString())}&timeMax=${encodeURIComponent(e.toISOString())}` +
-      '&singleEvents=true&orderBy=startTime&maxResults=2500&fields=items(id,summary,start,end,status)';
-    const results = await Promise.all(cals.map((c) =>
-      gapi(`${CAL}/calendars/${encodeURIComponent(c.id)}/events?${params}`)
-        .then((r) => ({ c, items: r.items || [] }))
-        .catch((err) => { if (err.message === 'AUTH') throw err; console.warn(c.summary, err); return { c, items: [] }; })));
-    const out = [];
-    for (const { c, items } of results) {
-      for (const it of items) {
-        if (it.status === 'cancelled' || !it.start) continue;
-        const allDay = !!it.start.date;
-        out.push({
-          id: it.id,
-          calId: c.id,
-          title: it.summary || '(제목 없음)',
-          allDay,
-          start: allDay ? parseYmd(it.start.date) : new Date(it.start.dateTime),
-          end: allDay ? parseYmd(it.end.date) : new Date(it.end.dateTime),
-          color: c.backgroundColor || '#2563eb',
-          editable: c.accessRole === 'owner' || c.accessRole === 'writer',
-        });
+    let list = memos.visible(s, e);
+    if (naver.enabled()) {
+      try {
+        list = list.concat(await naver.load(s, e));
+        naver.warned = false;
+      } catch (err) {
+        if (err.message === 'AUTH') throw err;
+        if (!naver.warned) { naver.warned = true; toast('네이버 캘린더를 불러오지 못했어요: ' + err.message.slice(0, 100), 5000); }
+        console.warn(err);
+        list.sort(sortEvents);
+        return list; // 실패 결과는 캐시하지 않음
       }
     }
-    return out;
-  },
-
-  localList() { return store.get('localEvents', []); },
-  loadLocal(s, e) {
-    return this.localList()
-      .map((x) => ({ ...x, start: new Date(x.start), end: new Date(x.end), color: '#2563eb', editable: true, calId: 'local' }))
-      .filter((x) => x.start < e && x.end > s);
+    list.sort(sortEvents);
+    this.cache.set(this.key(s, e), list);
+    return list;
   },
 
   on(list, day) {
@@ -362,55 +479,13 @@ const events = {
     return list.filter((ev) => ev.start < e && (ev.end > s || (+ev.start === +ev.end && ev.start >= s)));
   },
 
-  toGoogle(ev) {
-    const body = { summary: ev.title };
-    if (ev.allDay) {
-      body.start = { date: ymd(ev.start) };
-      body.end = { date: ymd(ev.end) };
-    } else {
-      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      body.start = { dateTime: localISO(ev.start), timeZone };
-      body.end = { dateTime: localISO(ev.end), timeZone };
-    }
-    return body;
-  },
-
-  async add(ev) {
-    if (auth.signedIn()) {
-      await gapi(`${CAL}/calendars/primary/events`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.toGoogle(ev)),
-      });
-    } else {
-      const list = this.localList();
-      list.push({ id: 'l' + Date.now().toString(36), title: ev.title, allDay: ev.allDay, start: ev.start.toISOString(), end: ev.end.toISOString() });
-      store.set('localEvents', list);
-    }
-    this.clear();
-  },
-
-  async remove(ev) {
-    if (ev.calId === 'local') store.set('localEvents', this.localList().filter((x) => x.id !== ev.id));
-    else await gapi(`${CAL}/calendars/${encodeURIComponent(ev.calId)}/events/${encodeURIComponent(ev.id)}`, { method: 'DELETE' });
-    this.clear();
-  },
-
-  // 로그인 전에 기기에 적어둔 일정을 구글 캘린더로 옮김
-  async migrateLocal() {
-    const list = this.localList();
-    if (!list.length) return;
-    const left = [];
-    for (const x of list) {
-      try {
-        await gapi(`${CAL}/calendars/primary/events`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.toGoogle({ ...x, start: new Date(x.start), end: new Date(x.end) })),
-        });
-      } catch (e) { left.push(x); console.warn(e); }
-    }
-    store.set('localEvents', left);
-    if (list.length > left.length) toast(`기기에 있던 일정 ${list.length - left.length}개를 구글 캘린더로 옮겼어요`);
-  },
+  add(ev) { memos.add(ev); this.clear(); },
+  remove(ev) { memos.remove(ev.id); this.clear(); },
 };
+
+function sortEvents(a, b) {
+  return (b.allDay - a.allDay) || (a.start - b.start) || a.title.localeCompare(b.title);
+}
 
 // ---------- 화면 상태
 const state = {
@@ -767,7 +842,7 @@ async function saveNow() {
   if (!state.date) return;
   try { await notes.put(state.date, { ...pad.note, strokes: pad.note.strokes.slice() }); }
   catch (e) { handleErr(e); }
-  if (!auth.signedIn()) setStatus();
+  if (!auth.connected()) setStatus();
 }
 
 function setFingerDraw(v) {
@@ -891,7 +966,7 @@ async function renderDayEvents() {
         time = sameDay ? `${hm(ev.start)}–${hm(ev.end)}` : ymd(ev.start) === ds ? `${hm(ev.start)}~` : '~' + (ymd(ev.end) === ds ? hm(ev.end) : '');
       }
       li.append(dot, el('span', 'ev-time', time), el('span', 'ev-title', ev.title));
-      li.title = ev.title;
+      li.title = ev.calendar ? `${ev.title} · 네이버 ${ev.calendar}` : ev.title;
       if (ev.editable) {
         const del = el('button', 'ev-del', '✕');
         del.setAttribute('aria-label', '일정 삭제');
@@ -941,7 +1016,7 @@ async function onAddEvent(ev) {
 function setStatus(kind) {
   const s = $('#sync-status');
   if (!kind) {
-    if (!auth.signedIn()) kind = auth.wasSignedIn() ? 'expired' : 'local';
+    if (!auth.connected()) kind = auth.wasSignedIn() ? 'expired' : 'local';
     else kind = notes.pending.size ? 'saving' : 'synced';
   }
   s.textContent = {
@@ -972,6 +1047,8 @@ function handleErr(e) {
     toast('config.js에 구글 클라이언트 ID를 넣어야 동기화돼요. (README 참고)', 5000);
   } else if (msg === 'GIS_NOT_LOADED') {
     toast('구글 로그인 모듈을 불러오지 못했어요. 인터넷 연결을 확인해 주세요.', 4000);
+  } else if (e?.code === 'not_owner') {
+    toast('허용되지 않은 구글 계정이에요. 앱 주인 계정으로 로그인해 주세요.', 5000);
   } else if (/popup_closed|access_denied/.test(msg)) {
     toast('로그인이 취소됐어요');
   } else if (/popup_failed/.test(msg)) {
@@ -986,7 +1063,7 @@ function handleErr(e) {
 function updateAuthUI() {
   const b = $('#auth-btn');
   if (!CFG.GOOGLE_CLIENT_ID) { b.textContent = '구글 연결 설정'; b.className = 'pill'; }
-  else if (auth.signedIn()) { b.textContent = '로그아웃'; b.className = 'pill'; }
+  else if (auth.connected()) { b.textContent = '로그아웃'; b.className = 'pill'; }
   else if (auth.wasSignedIn()) { b.textContent = '다시 연결'; b.className = 'pill primary'; }
   else { b.textContent = '구글 로그인'; b.className = 'pill primary'; }
   setStatus();
@@ -995,7 +1072,7 @@ function updateAuthUI() {
 let expiryTimer = null;
 function watchExpiry() {
   clearTimeout(expiryTimer);
-  if (auth.signedIn()) expiryTimer = setTimeout(() => { auth.expire(); updateAuthUI(); }, auth.expires - Date.now());
+  if (auth.signedIn() && !auth.canRefresh()) expiryTimer = setTimeout(() => { auth.expire(); updateAuthUI(); }, auth.expires - Date.now());
 }
 
 async function connect(prompt) {
@@ -1006,7 +1083,7 @@ async function connect(prompt) {
 
 async function onAuthClick() {
   if (!CFG.GOOGLE_CLIENT_ID) return handleErr(new Error('NO_CLIENT_ID'));
-  if (auth.signedIn()) {
+  if (auth.connected()) {
     if (!confirm('로그아웃할까요? 이 기기에 저장된 필기는 그대로 남아요.')) return;
     auth.signOut();
     events.reset();
@@ -1021,7 +1098,7 @@ async function afterSignIn() {
   updateAuthUI();
   try {
     await notes.syncIndex();
-    await events.migrateLocal();
+    await memos.sync();
     events.reset();
     rerender();
     await notes.flush();
@@ -1035,10 +1112,11 @@ function rerender() {
 
 let lastRefresh = 0;
 async function refreshInBackground() {
-  if (!auth.signedIn() || Date.now() - lastRefresh < 20000) return;
+  if (!auth.connected() || Date.now() - lastRefresh < 20000) return;
   lastRefresh = Date.now();
   try {
     await notes.refreshIndex(20000);
+    await memos.sync();
     events.clear();
     rerender();
     if (notes.pending.size) notes.flush();
@@ -1062,7 +1140,7 @@ function bind() {
   // 1시간 로그인 만료 후 다음 탭에서 자동으로 다시 연결 (팝업이 잠깐 떴다 닫힘)
   let reconnecting = false;
   document.addEventListener('click', (e) => {
-    if (reconnecting || auth.signedIn() || !auth.wasSignedIn()) return;
+    if (reconnecting || auth.connected() || !auth.wasSignedIn()) return;
     if (e.target.closest('#auth-btn, canvas')) return;
     reconnecting = true;
     connect('').catch(handleErr).finally(() => { reconnecting = false; });
@@ -1179,7 +1257,7 @@ async function init() {
   updateAuthUI();
   history.replaceState(null, '', location.pathname + location.search);
   renderMonth();
-  if (auth.signedIn()) { watchExpiry(); afterSignIn(); }
+  if (auth.connected()) { watchExpiry(); afterSignIn(); }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
   }
