@@ -1565,23 +1565,14 @@ function renderOcr() {
   $('#ocr-copy').classList.toggle('hidden', !o);
   $('#ocr-result').classList.toggle('hidden', !o);
   $('#ocr-hint').classList.toggle('hidden', !!o && !needsOcr(pad.note));
-  let hint = '필기를 멈추고 잠시 뒤 자동으로 글자로 바꾸고 요약해요.';
+  let hint = '필기를 멈추고 잠시 뒤 자동으로 글자로 바꿔요. 요약은 달력에 보여요.';
   if (!CFG.WORKER_URL) hint = '중계 서버(WORKER_URL)를 연결하면 쓸 수 있어요.';
   else if (state.date && autoOcr.queue.has(state.date) && autoOcr.retryAt > Date.now()) {
     hint = `AI 서버가 붐벼서 ${new Date(autoOcr.retryAt).toTimeString().slice(0, 5)}쯤 다시 변환해요.`;
   } else if (o && needsOcr(pad.note)) hint = '필기가 바뀌어서 잠시 뒤 다시 변환해요.';
   $('#ocr-hint').textContent = hint;
   if (!o) return;
-  const box = $('#ocr-summary');
-  const parts = [];
-  if (o.summary) { parts.push(el('h3', null, '요약'), el('p', null, o.summary)); }
-  for (const [title, items] of [['할 일', o.todos], ['결정 사항', o.decisions]]) {
-    if (!items?.length) continue;
-    const ul = el('ul');
-    for (const t of items) ul.append(el('li', null, t));
-    parts.push(el('h3', null, title), ul);
-  }
-  box.replaceChildren(...parts);
+  // 오른쪽 칸에는 원문만. 요약·할 일은 달력 칸 한 줄로만 보여줌
   if (document.activeElement !== $('#ocr-text')) $('#ocr-text').value = o.text || '';
 }
 
@@ -1605,14 +1596,6 @@ async function runOcr() {
     btn.disabled = false;
     if (state.date === date) renderOcr();
   }
-}
-
-function ocrAsText(o) {
-  const lines = [o.text || ''];
-  if (o.summary) lines.push('', '[요약]', o.summary);
-  if (o.todos?.length) lines.push('', '[할 일]', ...o.todos.map((t) => '☐ ' + t));
-  if (o.decisions?.length) lines.push('', '[결정 사항]', ...o.decisions.map((t) => '• ' + t));
-  return lines.join('\n').trim();
 }
 
 // ---------- 동기화 상태 / 알림
@@ -1918,7 +1901,7 @@ function bind() {
   // 필기 → 글자
   $('#ocr-btn').onclick = runOcr;
   $('#ocr-copy').onclick = async () => {
-    try { await navigator.clipboard.writeText(ocrAsText(pad.note.ocr)); toast('복사했어요'); }
+    try { await navigator.clipboard.writeText(pad.note.ocr?.text || ''); toast('복사했어요'); }
     catch { toast('복사하지 못했어요'); }
   };
   $('#ocr-text').addEventListener('input', (e) => {
