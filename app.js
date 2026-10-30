@@ -534,6 +534,32 @@ async function renderMonth() {
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
 
+  // 주마다 일정을 줄(lane)에 배치: 여러 날에 걸친 일정은 같은 줄에 길게 이어서 그림
+  const weekLayouts = [];
+  if (evs) {
+    for (let w = 0; w < weeks; w++) {
+      const spans = new Map(); // ev -> { first, last }
+      for (let i = 0; i < 7; i++) {
+        for (const ev of events.on(evs, addDays(start, w * 7 + i))) {
+          const sp = spans.get(ev);
+          if (sp) sp.last = i; else spans.set(ev, { ev, first: i, last: i });
+        }
+      }
+      const items = [...spans.values()].sort((a, b) =>
+        (a.first - b.first) || ((b.last - b.first) - (a.last - a.first)) || sortEvents(a.ev, b.ev));
+      const lanes = []; // lanes[l][day] = item
+      for (const it of items) {
+        let l = 0;
+        while (lanes[l] && lanes[l].slice(it.first, it.last + 1).some(Boolean)) l++;
+        if (!lanes[l]) lanes[l] = new Array(7).fill(null);
+        for (let i = it.first; i <= it.last; i++) lanes[l][i] = it;
+        it.lane = l;
+      }
+      const overflow = lanes.length > maxChips;
+      weekLayouts.push({ lanes, visible: overflow ? Math.max(1, maxChips - 1) : lanes.length, overflow });
+    }
+  }
+
   for (let i = 0; i < weeks * 7; i++) {
     const d = addDays(start, i), ds = ymd(d), wd = d.getDay();
     const cell = el('div', 'cell');
@@ -545,14 +571,30 @@ async function renderMonth() {
     if (notes.has(ds)) head.append(inkIcon());
     cell.append(head);
     if (evs) {
-      const list = events.on(evs, d);
-      const shown = list.length > maxChips ? maxChips - 1 : list.length;
-      for (const ev of list.slice(0, shown)) {
-        const chip = el('div', 'chip', ev.title);
-        chip.style.setProperty('--c', ev.color);
+      const { lanes, visible } = weekLayouts[Math.floor(i / 7)];
+      const col = i % 7;
+      let lastUsed = -1;
+      for (let l = 0; l < visible; l++) if (lanes[l][col]) lastUsed = l;
+      for (let l = 0; l <= lastUsed; l++) {
+        const it = lanes[l][col];
+        if (!it || it.first !== col) { cell.append(el('div', 'chip spacer', ' ')); continue; }
+        const n = it.last - it.first + 1;
+        const chip = el('div', 'chip', it.ev.title);
+        chip.style.setProperty('--c', it.ev.color);
+        // 지난주/다음주로 이어지는 일정은 그쪽 끝을 칸 끝까지 붙이고 모서리를 각지게
+        const contL = it.first === 0 && ymd(it.ev.start) < ds;
+        const contR = it.last === 6 && events.on([it.ev], addDays(start, Math.floor(i / 7) * 7 + 7)).length > 0;
+        if (contL) chip.classList.add('cont-left');
+        if (contR) chip.classList.add('cont-right');
+        if (n > 1 || contL || contR) {
+          chip.classList.add('span');
+          chip.style.width = `calc(${n * 100}% + ${(n - 1) * 9 + (contL ? 4 : 0) + (contR ? 4 : 0)}px)`;
+        }
         cell.append(chip);
       }
-      if (list.length > shown) cell.append(el('div', 'more', `+${list.length - shown}개`));
+      let hidden = 0;
+      for (let l = visible; l < lanes.length; l++) if (lanes[l][col]) hidden++;
+      if (hidden) cell.append(el('div', 'more', `+${hidden}개`));
     }
     frag.append(cell);
   }

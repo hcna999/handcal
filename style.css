@@ -92,6 +92,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  overflow-x: visible;
+  overflow-y: clip;
   cursor: pointer;
 }
 .cell:hover { background: #fafcff; }
@@ -117,6 +119,11 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   background: color-mix(in srgb, var(--c) 16%, white);
   border-left: 3px solid var(--c);
 }
+/* 여러 날에 걸친 일정: 옆 칸 위로 길게 이어서 그림 */
+.chip.span { position: relative; z-index: 1; pointer-events: none; }
+.chip.cont-left { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding-left: 7px; margin-left: -4px; }
+.chip.cont-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.chip.spacer { visibility: hidden; }
 .more { font-size: 11px; color: var(--muted); padding-left: 4px; flex-shrink: 0; }
 
 /* ---------- day */
