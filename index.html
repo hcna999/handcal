@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>필기 캘린더</title>
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="필기캘린더">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div id="month-nav" class="nav">
+    <button id="prev-month" class="arrow" aria-label="이전 달">‹</button>
+    <h1 id="month-title"></h1>
+    <button id="next-month" class="arrow" aria-label="다음 달">›</button>
+    <button id="today-btn" class="pill">오늘</button>
+  </div>
+  <div id="day-nav" class="nav hidden">
+    <button id="back-btn" class="pill">‹ 달력</button>
+    <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
+    <h1 id="day-title"></h1>
+    <button id="next-day" class="arrow" aria-label="다음 날">›</button>
+  </div>
+  <div class="right">
+    <span id="sync-status" class="status"></span>
+    <button id="auth-btn" class="pill primary">구글 로그인</button>
+  </div>
+</header>
+
+<main>
+  <section id="month-view">
+    <div class="weekdays">
+      <div class="sun">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div class="sat">토</div>
+    </div>
+    <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="day-view" class="hidden">
+    <div class="toolbar">
+      <div class="group">
+        <button class="tool active" data-tool="pen">펜</button>
+        <button class="tool" data-tool="hl">형광펜</button>
+        <button class="tool" data-tool="eraser">지우개</button>
+      </div>
+      <div class="group" id="colors"></div>
+      <div class="group" id="sizes"></div>
+      <div class="group">
+        <button id="undo" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
+        <button id="redo" title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
+      </div>
+      <div class="group">
+        <button id="finger-mode" class="pill"></button>
+        <button id="clear" class="pill danger">전체 지우기</button>
+      </div>
+    </div>
+    <div class="day-body">
+      <details id="events-panel" class="events-panel" open>
+        <summary id="events-summary">일정</summary>
+        <ul id="event-list"></ul>
+        <form id="event-form" autocomplete="off">
+          <input id="ev-title" placeholder="일정 입력 후 추가" required>
+          <div class="ev-row">
+            <label><input type="checkbox" id="ev-allday" checked> 종일</label>
+            <span id="ev-times" class="hidden">
+              <input type="time" id="ev-start" value="09:00"> ~ <input type="time" id="ev-end" value="10:00">
+            </span>
+            <button type="submit" class="pill primary">추가</button>
+          </div>
+        </form>
+      </details>
+      <div id="page-scroll" class="page-scroll">
+        <div class="page-wrap">
+          <canvas id="canvas"></canvas>
+          <canvas id="overlay"></canvas>
+          <div id="loading" class="loading hidden">불러오는 중…</div>
+        </div>
+        <button id="add-page" class="pill">+ 페이지 늘리기</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+</body>
+</html>
