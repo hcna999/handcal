@@ -637,7 +637,7 @@ function layoutPad() {
   const cssW = Math.max(280, Math.min(wrap.clientWidth - 24, 1100));
   pad.scale = cssW / PAGE_W;
   const cssH = Math.round(pad.note.height * pad.scale);
-  pad.dpr = Math.min(window.devicePixelRatio || 1, Math.sqrt(12e6 / (cssW * cssH)));
+  pad.dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), Math.sqrt(16e6 / (cssW * cssH)));
   for (const c of [pad.canvas, pad.overlay]) {
     c.style.width = cssW + 'px';
     c.style.height = cssH + 'px';
@@ -670,6 +670,110 @@ function drawPaper(ctx) {
   ctx.restore();
 }
 
+// 획을 부드럽게: 손떨림 보정 → 필압(펜) 또는 속도(손가락·마우스)로 굵기 → 외곽선을 채워서 그림
+// 촘촘한 점(손떨림)만 다듬고, 크게 움직인 곳은 모양을 그대로 둠
+function smoothPoints(p, k = 0.45, scale = 4) {
+  if (p.length < 3) return p.map((q) => q.slice());
+  const out = [p[0].slice()];
+  for (let i = 1; i < p.length; i++) {
+    const a = out[i - 1], b = p[i];
+    const d = Math.hypot(b[0] - p[i - 1][0], b[1] - p[i - 1][1]);
+    const kk = k * Math.max(0, 1 - d / scale);
+    out.push([a[0] + (b[0] - a[0]) * (1 - kk), a[1] + (b[1] - a[1]) * (1 - kk), b[2]]);
+  }
+  out[out.length - 1] = p[p.length - 1].slice(); // 끝점은 손을 뗀 자리 그대로
+  return out;
+}
+
+function strokeRadii(p, size) {
+  const realPressure = p.some((q) => q[2] !== 0.5);
+  const n = p.length, r = new Array(n);
+  let pr = realPressure ? p[0][2] : 0.6;
+  for (let i = 0; i < n; i++) {
+    let target;
+    if (realPressure) target = p[i][2];
+    else {
+      // 압력이 없으면 빠르게 그을수록 살짝 가늘게
+      const d = i ? Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]) : 0;
+      target = Math.max(0.5, 0.75 - d / (size * 10));
+    }
+    pr += (target - pr) * (realPressure ? 0.35 : 0.2);
+    r[i] = (size * (0.35 + 0.95 * pr)) / 2;
+  }
+  // 시작·끝을 살짝 가늘게 (펜을 대고 뗄 때 자연스럽게)
+  let acc = 0;
+  const taper = size * 2.5;
+  for (let i = 1; i < n && acc < taper; i++) {
+    acc += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+    r[i - 1] *= 0.55 + 0.45 * Math.min(1, acc / taper);
+  }
+  acc = 0;
+  for (let i = n - 2; i >= 0 && acc < taper; i--) {
+    acc += Math.hypot(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
+    r[i + 1] *= realPressure ? 1 : 0.6 + 0.4 * Math.min(1, acc / taper);
+  }
+  return r;
+}
+
+// 점 사이를 곡선으로 촘촘히 채움 (빠르게 그어 점이 듬성듬성해도 매끈하게)
+function densify(p, step = 1.2) {
+  if (p.length < 3) return p;
+  const out = [p[0]];
+  const lerp = (a, b, t) => a + (b - a) * t;
+  let s0 = p[0];
+  for (let i = 1; i < p.length; i++) {
+    const last = i === p.length - 1;
+    const c = p[i];
+    const e = last ? c : [(c[0] + p[i + 1][0]) / 2, (c[1] + p[i + 1][1]) / 2, (c[2] + p[i + 1][2]) / 2];
+    const len = Math.hypot(c[0] - s0[0], c[1] - s0[1]) + Math.hypot(e[0] - c[0], e[1] - c[1]);
+    const k = Math.max(1, Math.ceil(len / step));
+    for (let j = 1; j <= k; j++) {
+      const t = j / k;
+      if (last) { out.push([lerp(s0[0], c[0], t), lerp(s0[1], c[1], t), lerp(s0[2], c[2], t)]); continue; }
+      const u = 1 - t;
+      out.push([u * u * s0[0] + 2 * u * t * c[0] + t * t * e[0], u * u * s0[1] + 2 * u * t * c[1] + t * t * e[1], lerp(lerp(s0[2], c[2], t), lerp(c[2], e[2], t), t)]);
+    }
+    s0 = e;
+    if (last) break;
+  }
+  return out;
+}
+
+function fillPenStroke(ctx, raw, size) {
+  const sm = smoothPoints(raw);
+  const r0 = strokeRadii(sm, size);
+  if (sm.length === 1) {
+    ctx.beginPath();
+    ctx.arc(sm[0][0], sm[0][1], r0[0], 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  // 굵기를 세 번째 값에 실어 같이 촘촘히 보간
+  const p = densify(sm.map((q, i) => [q[0], q[1], r0[i]]));
+  const n = p.length;
+  const L = [], R = [];
+  let a0 = 0, a1 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = p[Math.max(0, i - 2)], b = p[Math.min(n - 1, i + 2)];
+    let dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    if (i === 0) a0 = Math.atan2(dy, dx);
+    if (i === n - 1) a1 = Math.atan2(dy, dx);
+    const r = p[i][2];
+    L.push([p[i][0] - dy * r, p[i][1] + dx * r]);
+    R.push([p[i][0] + dy * r, p[i][1] - dx * r]);
+  }
+  ctx.beginPath();
+  ctx.moveTo(L[0][0], L[0][1]);
+  for (let i = 1; i < n; i++) ctx.lineTo(L[i][0], L[i][1]);
+  ctx.arc(p[n - 1][0], p[n - 1][1], p[n - 1][2], a1 + Math.PI / 2, a1 - Math.PI / 2, true);
+  for (let i = n - 1; i >= 0; i--) ctx.lineTo(R[i][0], R[i][1]);
+  ctx.arc(p[0][0], p[0][1], p[0][2], a0 - Math.PI / 2, a0 - Math.PI * 1.5, true);
+  ctx.closePath();
+  ctx.fill();
+}
+
 function drawStroke(ctx, s) {
   const p = s.points;
   if (!p.length) return;
@@ -678,37 +782,19 @@ function drawStroke(ctx, s) {
   ctx.lineJoin = 'round';
   ctx.strokeStyle = ctx.fillStyle = s.color;
   if (s.tool === 'hl') {
+    const q = smoothPoints(p, 0.5);
     ctx.globalAlpha = 0.35;
     ctx.lineWidth = s.size;
     ctx.beginPath();
-    ctx.moveTo(p[0][0], p[0][1]);
-    if (p.length === 1) ctx.lineTo(p[0][0] + 0.1, p[0][1]);
-    for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]);
+    ctx.moveTo(q[0][0], q[0][1]);
+    if (q.length === 1) ctx.lineTo(q[0][0] + 0.1, q[0][1]);
+    for (let i = 1; i < q.length - 1; i++) {
+      ctx.quadraticCurveTo(q[i][0], q[i][1], (q[i][0] + q[i + 1][0]) / 2, (q[i][1] + q[i + 1][1]) / 2);
+    }
+    if (q.length > 1) ctx.lineTo(q[q.length - 1][0], q[q.length - 1][1]);
     ctx.stroke();
   } else {
-    const w = (pr) => s.size * (0.4 + 0.9 * pr);
-    if (p.length === 1) {
-      ctx.beginPath();
-      ctx.arc(p[0][0], p[0][1], w(p[0][2]) / 2, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      let prev = p[0];
-      for (let i = 1; i < p.length - 1; i++) {
-        const mid = [(p[i][0] + p[i + 1][0]) / 2, (p[i][1] + p[i + 1][1]) / 2];
-        ctx.lineWidth = w(p[i][2]);
-        ctx.beginPath();
-        ctx.moveTo(prev[0], prev[1]);
-        ctx.quadraticCurveTo(p[i][0], p[i][1], mid[0], mid[1]);
-        ctx.stroke();
-        prev = mid;
-      }
-      const last = p[p.length - 1];
-      ctx.lineWidth = w(last[2]);
-      ctx.beginPath();
-      ctx.moveTo(prev[0], prev[1]);
-      ctx.lineTo(last[0], last[1]);
-      ctx.stroke();
-    }
+    fillPenStroke(ctx, s.predicted ? p.concat(s.predicted) : p, s.size);
   }
   ctx.restore();
 }
@@ -847,10 +933,15 @@ function onPointerMove(e) {
     if (pad.active.erase) eraseAt(pt[0], pt[1]);
     else {
       const pts = pad.active.stroke.points, last = pts[pts.length - 1];
-      if (Math.abs(pt[0] - last[0]) + Math.abs(pt[1] - last[1]) >= 0.8) pts.push(pt);
+      if (Math.abs(pt[0] - last[0]) + Math.abs(pt[1] - last[1]) >= 0.5) pts.push(pt);
       else last[2] = pt[2];
     }
     pad.hover = pt;
+  }
+  // 손이 앞서가는 만큼 예측점을 잠깐 그려서 반응을 빠르게 (저장은 안 함)
+  if (pad.active.stroke && pad.active.stroke.tool !== 'hl') {
+    const pred = e.getPredictedEvents?.() || [];
+    pad.active.stroke.predicted = pred.length ? pred.slice(0, 2).map(makePoint) : null;
   }
   requestOverlay();
 }
@@ -863,6 +954,7 @@ function onPointerUp(e) {
   if (a.erase) {
     if (a.changed) { pushUndo(a.before); saveSoon(); }
   } else {
+    delete a.stroke.predicted;
     pushUndo();
     pad.note.strokes.push(a.stroke);
     drawStroke(pad.ctx, a.stroke);
@@ -1297,8 +1389,10 @@ async function init() {
   bind();
   await notes.loadLocal();
   updateAuthUI();
-  history.replaceState(null, '', location.pathname + location.search);
+  const openToday = new URLSearchParams(location.search).get('open') === 'today';
+  history.replaceState(null, '', location.pathname);
   renderMonth();
+  if (openToday) openDay(ymd(new Date()));
   if (auth.connected()) { watchExpiry(); afterSignIn(); }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
