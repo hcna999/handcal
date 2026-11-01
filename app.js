@@ -238,13 +238,15 @@ const drive = {
 // 하루 필기 = 탭(pages) 최대 MAX_TABS개. 각 탭은 자기 획·종이 길이·글자 변환 결과를 가짐
 const MAX_TABS = 5;
 const newPageId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const blankPage = () => ({ id: newPageId(), height: PAGE_H, strokes: [] });
+// kind: 'ink'(손글씨) 또는 'text'(키보드 메모)
+const blankPage = (kind = 'ink') => (kind === 'text' ? { id: newPageId(), kind, height: PAGE_H, strokes: [], text: '' } : { id: newPageId(), height: PAGE_H, strokes: [] });
 const blankNote = () => ({ v: 2, pages: [blankPage()], updated: 0 });
 const normPage = (p, id) => ({
   id: p?.id || id,
   height: Math.max(PAGE_H, Number(p?.height) || PAGE_H),
   strokes: Array.isArray(p?.strokes) ? p.strokes : [],
   ...(p?.ocr ? { ocr: p.ocr } : {}),
+  ...(p?.kind === 'text' ? { kind: 'text', text: String(p.text || '') } : {}),
 });
 // 예전 형식(탭 없이 strokes 하나)도 첫 번째 탭으로 읽음
 const normalize = (n) => ({
@@ -253,7 +255,7 @@ const normalize = (n) => ({
   updated: n?.updated || 0,
   remoteTime: n?.remoteTime,
 });
-const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length);
+const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length && !(p.text || '').trim());
 const cloneDoc = (doc) => ({ ...doc, pages: doc.pages.map((p) => ({ ...p, strokes: p.strokes.slice() })) });
 
 const notes = {
@@ -701,6 +703,17 @@ const pad = {
 };
 
 function layoutPad() {
+  const isText = pad.note.kind === 'text';
+  const ta = $('#text-page');
+  $('#day-view').classList.toggle('text-mode', isText);
+  $('.page-wrap').classList.toggle('hidden', isText);
+  $('#add-page').classList.toggle('hidden', isText);
+  ta.classList.toggle('hidden', !isText);
+  if (isText) {
+    if (ta.dataset.pageId !== pad.note.id) { ta.value = pad.note.text || ''; ta.dataset.pageId = pad.note.id; }
+    return;
+  }
+  ta.dataset.pageId = '';
   const wrap = $('#page-scroll');
   if (!wrap.clientWidth) return;
   const cssW = Math.max(280, Math.min(wrap.clientWidth - 24, 1100));
@@ -1046,6 +1059,7 @@ async function saveNow() {
   catch (e) { handleErr(e); }
   if (docEmpty(pad.doc)) { autoOcr.drop(date); digests.remove(date); }
   else if (docNeedsOcr(pad.doc)) { pad.lastEdit = Date.now(); autoOcr.touch(date); }
+  if (!docEmpty(pad.doc)) refreshDigest(date, pad.doc);
   if (!auth.connected()) setStatus();
 }
 
@@ -1139,7 +1153,7 @@ async function openDay(ds, { push = true } = {}) {
     const note = await notes.get(ds);
     if (token !== dayToken) return;
     pad.doc = note;
-    pad.pageIdx = 0;
+    pad.pageIdx = Math.max(0, note.pages.findIndex((p) => p.strokes.length || (p.text || '').trim()));
     renderTabs();
     renderOcr();
     layoutPad();
@@ -1169,6 +1183,10 @@ async function closeDay() {
 
 // ---------- 필기 탭
 function tabLabel(page, i) {
+  if (page.kind === 'text') {
+    const first = firstLine(page.text);
+    return '⌨ ' + (first ? first.slice(0, 10) : `메모 ${i + 1}`);
+  }
   const first = (page.ocr?.text || '').split('\n').map((l) => l.replace(/^[-•\d.\s]+/, '').trim()).find(Boolean);
   return first ? first.slice(0, 10) : `필기 ${i + 1}`;
 }
@@ -1180,7 +1198,7 @@ function renderTabs() {
     const b = el('button', 'page-tab' + (i === pad.pageIdx ? ' active' : ''));
     b.append(el('span', 'page-tab-label', tabLabel(p, i)));
     if (p.ocr && !needsOcr(p)) b.append(el('span', 'page-tab-done', '✓'));
-    b.title = p.ocr?.summary || `필기 ${i + 1}`;
+    b.title = p.kind === 'text' ? firstLine(p.text) || '키보드 메모' : p.ocr?.summary || `필기 ${i + 1}`;
     b.onclick = () => switchPage(i);
     if (i === pad.pageIdx && pages.length > 1) {
       const x = el('span', 'page-tab-x', '✕');
@@ -1192,11 +1210,12 @@ function renderTabs() {
     return b;
   });
   if (pages.length < MAX_TABS) {
-    const add = el('button', 'page-tab add', '+');
-    add.setAttribute('aria-label', '새 필기 탭');
-    add.title = `새 필기 탭 (최대 ${MAX_TABS}개)`;
-    add.onclick = addPage;
-    items.push(add);
+    for (const [kind, label, title] of [['ink', '+ 필기', '새 손글씨 탭'], ['text', '+ 타자', '새 키보드 메모 탭']]) {
+      const add = el('button', 'page-tab add', label);
+      add.title = `${title} (최대 ${MAX_TABS}개)`;
+      add.onclick = () => addPage(kind);
+      items.push(add);
+    }
   }
   bar.replaceChildren(...items);
 }
@@ -1213,10 +1232,40 @@ function switchPage(i) {
   layoutPad();
 }
 
-function addPage() {
-  if (pad.doc.pages.length >= MAX_TABS || pad.loading) return;
-  pad.doc.pages.push(blankPage());
+function addPage(kind = 'ink') {
+  if (pad.loading) return;
+  // 지금 탭이 아무것도 없는 필기 탭이면 새로 만들지 않고 타자 탭으로 바꿈
+  if (kind === 'text') return openTextTab();
+  if (pad.doc.pages.length >= MAX_TABS) return;
+  pad.doc.pages.push(blankPage(kind));
   switchPage(pad.doc.pages.length - 1);
+  if (kind === 'text') $('#text-page').focus();
+}
+
+// 키보드 메모 탭으로 이동 (없으면 만들거나, 지금 탭이 빈 필기면 타자 탭으로 바꿈)
+function openTextTab() {
+  if (pad.loading) return false;
+  let i = pad.doc.pages.findIndex((p) => p.kind === 'text');
+  if (i < 0) {
+    const cur = pad.note;
+    if (!cur.strokes.length && cur.kind !== 'text') {
+      Object.assign(cur, { kind: 'text', text: '' });
+      delete cur.ocr;
+      i = pad.pageIdx;
+      renderTabs();
+      renderOcr();
+      layoutPad();
+    } else if (pad.doc.pages.length < MAX_TABS) {
+      pad.doc.pages.push(blankPage('text'));
+      i = pad.doc.pages.length - 1;
+    } else {
+      toast(`탭이 ${MAX_TABS}개로 가득 찼어요`);
+      return false;
+    }
+  }
+  switchPage(i);
+  $('#text-page').focus();
+  return true;
 }
 
 function deletePage(i) {
@@ -1335,10 +1384,16 @@ const inkSig = (note) => note.strokes.length + ':' + note.strokes.reduce((a, s) 
 const needsOcr = (note) => !!note?.strokes?.length && (!note.ocr || (note.ocr.sig && note.ocr.sig !== inkSig(note)));
 const docNeedsOcr = (doc) => doc.pages.some(needsOcr);
 // 달력 칸 요약: 탭마다 한 줄씩 이어 붙이고 할 일 개수는 합침
+const firstLine = (t) => (t || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
 function digestOf(doc) {
-  const done = doc.pages.filter((p) => p.ocr && p.strokes.length);
-  if (!done.length) return null;
-  return { text: done.map((p) => digestLine(p.ocr)).filter(Boolean).join(' · ').slice(0, 120), todos: done.reduce((a, p) => a + (p.ocr.todos?.length || 0), 0) };
+  const parts = [];
+  let todos = 0;
+  for (const p of doc.pages) {
+    if (p.kind === 'text') { if (firstLine(p.text)) parts.push(firstLine(p.text).slice(0, 80)); }
+    else if (p.ocr && p.strokes.length) { parts.push(digestLine(p.ocr)); todos += p.ocr.todos?.length || 0; }
+  }
+  const text = parts.filter(Boolean).join(' · ').slice(0, 120);
+  return text ? { text, todos } : null;
 }
 function refreshDigest(date, doc) {
   const d = digestOf(doc), cur = digests.get(date);
@@ -1724,6 +1779,7 @@ function autoFontPx() {
   return Math.max(13, Math.min(18, f));
 }
 function applyAutoFont() {
+  if (document.activeElement?.matches?.('input, textarea')) return;
   document.documentElement.style.setProperty('--fs-base', autoFontPx().toFixed(2) + 'px');
 }
 const settings = {
@@ -1898,6 +1954,17 @@ function bind() {
     saveSoon();
   };
 
+  // 키보드 메모
+  const ta = $('#text-page');
+  ta.addEventListener('input', () => {
+    if (pad.note.kind !== 'text' || ta.dataset.pageId !== pad.note.id) return;
+    pad.note.text = ta.value;
+    const label = document.querySelector('.page-tab.active .page-tab-label');
+    if (label) label.textContent = tabLabel(pad.note, pad.pageIdx);
+    saveSoon();
+  });
+  ta.addEventListener('blur', () => saveNow());
+
   // 필기 → 글자
   $('#ocr-btn').onclick = runOcr;
   $('#ocr-copy').onclick = async () => {
@@ -1933,6 +2000,15 @@ function bind() {
       else if (e.key === 'Escape') $('#back-btn').click();
       else if (e.key === 'ArrowLeft') shiftDay(-1);
       else if (e.key === 'ArrowRight') shiftDay(1);
+      else if (!mod && !e.altKey && (e.key.length === 1 || e.key === 'Enter' || e.key === 'Process') && !e.target.closest('button')) {
+        const ch = e.key.length === 1 ? e.key : e.key === 'Enter' ? '\n' : '';
+        if (openTextTab() && ch) {
+          e.preventDefault();
+          const ta = $('#text-page');
+          ta.value += ch;
+          ta.dispatchEvent(new Event('input'));
+        }
+      }
     } else if (e.key === 'ArrowLeft') animateMonth(-1);
     else if (e.key === 'ArrowRight') animateMonth(1);
   });

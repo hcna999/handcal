@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=19">
-<script src="config.js?v=19"></script>
+<link rel="stylesheet" href="style.css?v=20">
+<script src="config.js?v=20"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=19"></script>
-<script src="app.js?v=19" defer></script>
+<script src="vendor/perfect-freehand.js?v=20"></script>
+<script src="app.js?v=20" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -140,6 +140,7 @@
           <div id="loading" class="loading hidden">불러오는 중…</div>
         </div>
         <button id="add-page" class="pill">+ 종이 아래로 늘리기</button>
+        <textarea id="text-page" class="text-page hidden" placeholder="키보드로 메모를 입력하세요 (휴대폰 키보드·블루투스 키보드 모두 가능)" aria-label="키보드 메모"></textarea>
       </div>
     </div>
   </section>
