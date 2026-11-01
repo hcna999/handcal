@@ -548,7 +548,163 @@ function monthRange() {
   return { start, end: addDays(start, weeks * 7), weeks };
 }
 
-async function renderMonth() {
+// 보기 전환: 월간 / 주간 / 메모 모아보기
+const sundayOf = (d) => addDays(new Date(d.getFullYear(), d.getMonth(), d.getDate()), -d.getDay());
+state.calView = store.get('calView', 'month');
+state.weekStart = sundayOf(new Date());
+
+function renderMonth() {
+  $('#view-seg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.calView));
+  const v = state.calView;
+  $('#grid').classList.toggle('hidden', v !== 'month');
+  $('.weekdays').classList.toggle('hidden', v === 'list');
+  $('#month-view').classList.toggle('week-mode', v === 'week');
+  $('#week-grid').classList.toggle('hidden', v !== 'week');
+  $('#list-view').classList.toggle('hidden', v !== 'list');
+  for (const id of ['#prev-month', '#next-month', '#today-btn']) $(id).classList.toggle('hidden', v === 'list');
+  if (v === 'week') return renderWeek();
+  if (v === 'list') return renderList();
+  return renderMonthView();
+}
+
+function setCalView(v) {
+  if (v === state.calView) return;
+  const today = new Date();
+  if (v === 'week') {
+    // 지금 보던 달이 이번 달이면 이번 주, 아니면 그 달의 첫 주
+    const sameMonth = state.month.getFullYear() === today.getFullYear() && state.month.getMonth() === today.getMonth();
+    state.weekStart = sundayOf(sameMonth ? today : state.month);
+  } else if (v === 'month' && state.calView === 'week') {
+    const mid = addDays(state.weekStart, 3);
+    state.month = new Date(mid.getFullYear(), mid.getMonth(), 1);
+  }
+  state.calView = v;
+  store.set('calView', v);
+  renderMonth();
+}
+
+// 한 날짜의 탭들을 미리보기 글로: 타자 메모는 그대로, 손글씨는 변환된 글자(없으면 표시만)
+function docPreview(doc) {
+  return doc.pages.map((p) => {
+    if (p.kind === 'text') return { kind: 'text', text: (p.text || '').trim() };
+    if (!p.strokes.length) return null;
+    return p.ocr?.text ? { kind: 'ink', text: p.ocr.text.trim(), page: p } : { kind: 'ink', text: '', page: p };
+  }).filter((x) => x && (x.text || x.kind === 'ink'));
+}
+
+let weekToken = 0;
+async function renderWeek() {
+  const start = state.weekStart, end = addDays(start, 7), last = addDays(start, 6);
+  const sameYear = start.getFullYear() === new Date().getFullYear();
+  // 휴대폰처럼 좁으면 '10.25 – 31'처럼 짧게
+  $('#month-title').textContent = window.matchMedia('(max-width: 599px)').matches
+    ? `${start.getMonth() + 1}.${start.getDate()} – ` + (last.getMonth() === start.getMonth() ? `${last.getDate()}` : `${last.getMonth() + 1}.${last.getDate()}`)
+    : (sameYear ? '' : start.getFullYear() + '년 ') + `${start.getMonth() + 1}월 ${start.getDate()}일 – ` +
+      (last.getMonth() === start.getMonth() ? `${last.getDate()}일` : `${last.getMonth() + 1}월 ${last.getDate()}일`);
+  const evs = events.cached(start, end);
+  const today = ymd(new Date());
+  const token = ++weekToken;
+  const grid = $('#week-grid');
+  const cells = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(start, i), ds = ymd(d), wd = d.getDay();
+    const cell = el('div', 'wcell' + (ds === today ? ' today' : ''));
+    cell.dataset.date = ds;
+    const head = el('div', 'whead');
+    head.append(el('span', 'wday' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''), WD[wd]), el('span', 'num' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''), String(d.getDate())));
+    if (notes.has(ds)) head.append(inkIcon());
+    cell.append(head);
+    if (evs) {
+      for (const ev of events.on(evs, d)) {
+        const chip = el('div', 'chip', (ev.allDay ? '' : hm(ev.start) + ' ') + ev.title);
+        chip.style.setProperty('--c', ev.color);
+        chip.style.setProperty('--chip-text', textOn(ev.color));
+        cell.append(chip);
+      }
+    }
+    const memo = el('div', 'wmemo');
+    cell.append(memo);
+    cells.push({ ds, memo });
+  }
+  grid.replaceChildren(...cells.map((c) => c.memo.parentElement));
+  if (!evs) {
+    try {
+      await events.load(start, end);
+      if (token === weekToken && state.view === 'month' && state.calView === 'week') renderWeek();
+    } catch (e) { handleErr(e); }
+    return;
+  }
+  // 메모 미리보기는 노트를 읽어서 채움
+  for (const { ds, memo } of cells) {
+    if (!notes.has(ds)) continue;
+    try {
+      const doc = await notes.get(ds);
+      if (token !== weekToken) return;
+      for (const it of docPreview(doc)) {
+        memo.append(el('div', 'wmemo-item' + (it.kind === 'text' ? ' typed' : ''), it.text || '✎ 손글씨 (글자 변환 대기)'));
+      }
+    } catch (e) { console.warn(e); }
+  }
+}
+
+// ---------- 메모 모아보기: 메모가 있는 날짜를 최신순으로
+const LIST_PAGE = 20;
+const listState = { shown: LIST_PAGE, cache: new Map(), token: 0 };
+function allNoteDates() {
+  const set = new Set(notes.localDays);
+  for (const d of notes.remote.keys()) set.add(d);
+  return [...set].filter((d) => notes.has(d)).sort().reverse();
+}
+
+async function renderList() {
+  $('#month-title').textContent = '메모 모아보기';
+  const token = ++listState.token;
+  const q = $('#list-search').value.trim().toLowerCase();
+  const dates = allNoteDates();
+  const box = $('#list-items');
+  if (!dates.length) { box.replaceChildren(el('p', 'muted-text', '아직 메모가 없어요. 날짜를 눌러 필기하거나 타자로 적어 보세요.')); $('#list-more').classList.add('hidden'); return; }
+  // 검색할 때는 전부 읽어서 거름
+  const targets = q ? dates : dates.slice(0, listState.shown);
+  const items = [];
+  for (const ds of targets) {
+    let doc = listState.cache.get(ds);
+    if (!doc) {
+      try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
+      if (token !== listState.token) return;
+    }
+    const prev = docPreview(doc);
+    if (!prev.length) continue;
+    if (q && !prev.some((p) => p.text.toLowerCase().includes(q))) continue;
+    items.push(listItem(ds, prev));
+  }
+  if (token !== listState.token) return;
+  box.replaceChildren(...(items.length ? items : [el('p', 'muted-text', '검색 결과가 없어요.')]));
+  $('#list-more').classList.toggle('hidden', !!q || dates.length <= listState.shown);
+}
+
+function listItem(ds, prev) {
+  const d = parseYmd(ds);
+  const item = el('article', 'list-item');
+  item.dataset.date = ds;
+  const head = el('div', 'list-head');
+  head.append(el('span', 'list-date', `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`), el('span', 'list-wd' + (d.getDay() === 0 ? ' sun' : d.getDay() === 6 ? ' sat' : ''), WD[d.getDay()] + '요일'));
+  item.append(head);
+  for (const it of prev) {
+    if (it.text) item.append(el('div', 'list-text' + (it.kind === 'text' ? ' typed' : ''), it.text));
+    else {
+      // 아직 글자로 바뀌지 않은 손글씨는 작은 그림으로
+      const img = el('img', 'list-ink');
+      img.alt = '손글씨';
+      const wasDark = darkInk;
+      img.src = 'data:image/png;base64,' + noteImage(it.page);
+      darkInk = wasDark;
+      item.append(img);
+    }
+  }
+  return item;
+}
+
+async function renderMonthView() {
   const y = state.month.getFullYear(), m = state.month.getMonth();
   $('#month-title').textContent = `${y}년 ${m + 1}월`;
   const { start, end, weeks } = monthRange();
@@ -641,20 +797,22 @@ async function renderMonth() {
     const token = ++monthToken;
     try {
       await events.load(start, end);
-      if (token === monthToken && state.view === 'month') renderMonth();
+      if (token === monthToken && state.view === 'month' && state.calView === 'month') renderMonth();
     } catch (e) { handleErr(e); }
   }
 }
 
 function shiftMonth(n) {
-  state.month = new Date(state.month.getFullYear(), state.month.getMonth() + n, 1);
+  if (state.calView === 'week') state.weekStart = addDays(state.weekStart, 7 * n);
+  else state.month = new Date(state.month.getFullYear(), state.month.getMonth() + n, 1);
   renderMonth();
 }
 
 // 달 넘김 모션: 지금 달이 옆으로 빠지고 새 달이 반대쪽에서 들어옴 (손가락으로 끌던 위치에서 이어짐)
 let monthAnimating = false;
 function animateMonth(dir) {
-  const grid = $('#grid');
+  if (state.calView === 'list') return;
+  const grid = $(state.calView === 'week' ? '#week-grid' : '#grid');
   if (monthAnimating) return;
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     grid.style.transform = '';
@@ -1172,6 +1330,8 @@ async function closeDay() {
   const d = parseYmd(state.date);
   state.view = 'month';
   state.month = new Date(d.getFullYear(), d.getMonth(), 1);
+  if (state.calView === 'week') state.weekStart = sundayOf(d);
+  listState.cache.delete(state.date);
   state.date = null;
   $('#day-view').classList.add('hidden');
   $('#day-nav').classList.add('hidden');
@@ -1824,6 +1984,12 @@ function bind() {
   $('#next-month').onclick = () => animateMonth(1);
   $('#today-btn').onclick = () => {
     const t = new Date();
+    if (state.calView === 'week') {
+      const diffW = Math.round((sundayOf(t) - state.weekStart) / (7 * 86400e3));
+      if (diffW === 0) return;
+      state.weekStart = addDays(sundayOf(t), -7 * Math.sign(diffW));
+      return animateMonth(Math.sign(diffW));
+    }
     const diff = (t.getFullYear() - state.month.getFullYear()) * 12 + t.getMonth() - state.month.getMonth();
     if (diff === 0) return;
     if (Math.abs(diff) === 1) return animateMonth(diff);
@@ -1859,7 +2025,14 @@ function bind() {
   }, true);
 
   // 달력: 날짜 탭 → 하루 화면, 좌우 스와이프 → 달 이동
-  const grid = $('#grid');
+  $('#view-seg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setCalView(b.dataset.view); });
+  $('#list-search').addEventListener('input', () => { clearTimeout(listState.searchTimer); listState.searchTimer = setTimeout(renderList, 250); });
+  $('#list-more').onclick = () => { listState.shown += LIST_PAGE; renderList(); };
+  $('#list-items').addEventListener('click', (e) => { const it = e.target.closest('.list-item'); if (it) openDay(it.dataset.date); });
+  for (const grid of [$('#grid'), $('#week-grid')]) attachSwipe(grid);
+}
+
+function attachSwipe(grid) {
   let drag = null, swiped = false;
   grid.addEventListener('pointerdown', (e) => {
     if (monthAnimating) return;
@@ -1901,10 +2074,12 @@ function bind() {
   grid.addEventListener('pointercancel', endDrag);
   grid.addEventListener('click', (e) => {
     if (swiped) { swiped = false; return; }
-    const cell = e.target.closest('.cell');
+    const cell = e.target.closest('.cell, .wcell');
     if (cell) openDay(cell.dataset.date);
   });
+}
 
+function bindPad() {
   // 필기
   pad.canvas = $('#canvas');
   pad.overlay = $('#overlay');
@@ -2044,6 +2219,7 @@ function bind() {
 async function init() {
   auth.init();
   bind();
+  bindPad();
   settings.apply();
   await notes.loadLocal();
   updateAuthUI();

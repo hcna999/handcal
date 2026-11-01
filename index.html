@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=20">
-<script src="config.js?v=20"></script>
+<link rel="stylesheet" href="style.css?v=22">
+<script src="config.js?v=22"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=20"></script>
-<script src="app.js?v=20" defer></script>
+<script src="vendor/perfect-freehand.js?v=22"></script>
+<script src="app.js?v=22" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -37,6 +37,11 @@
     <h1 id="month-title"></h1>
     <button id="next-month" class="arrow" aria-label="다음 달">›</button>
     <button id="today-btn" class="pill">오늘</button>
+    <div id="view-seg" class="seg view-seg" role="tablist" aria-label="보기">
+      <button data-view="month">월</button>
+      <button data-view="week">주</button>
+      <button data-view="list">메모</button>
+    </div>
   </div>
   <div id="day-nav" class="nav hidden">
     <button id="back-btn" class="pill">‹ 달력</button>
@@ -79,6 +84,12 @@
       <div class="sun">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div class="sat">토</div>
     </div>
     <div id="grid" class="grid"></div>
+    <div id="week-grid" class="week-grid hidden"></div>
+    <div id="list-view" class="list-view hidden">
+      <input id="list-search" type="search" placeholder="메모 검색" aria-label="메모 검색">
+      <div id="list-items"></div>
+      <button id="list-more" class="pill hidden">더 보기</button>
+    </div>
   </section>
 
   <section id="day-view" class="hidden">
