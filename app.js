@@ -1,7 +1,7 @@
 'use strict';
 
 const CFG = window.APP_CONFIG || {};
-const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks';
 const FOLDER_NAME = '필기캘린더';
 const PAGE_W = 1000;
 const PAGE_H = 1414; // A4 비율
@@ -328,6 +328,7 @@ const notes = {
     this.pending.add(d);
     this.savePending();
     scheduleFlush();
+    gtasks.schedule(d);
   },
 
   async flush() {
@@ -768,9 +769,57 @@ async function toggleTodo(ds, t, done, row) {
   setTimeout(() => { if (state.calView === 'todo' && state.view === 'month') renderTodos(); }, done && !todoState.showDone ? 700 : 0);
 }
 
+// 타자 메모 아래: 이 메모의 할 일을 바로 체크
+function renderTextTodos() {
+  const box = $('#text-todos');
+  const page = pad.note;
+  const todos = page.kind === 'text' ? todosOf({ pages: [page] }) : [];
+  box.classList.toggle('hidden', !todos.length);
+  if (!todos.length) { box.replaceChildren(); return; }
+  const left = todos.filter((t) => !t.done).length;
+  box.replaceChildren(el('div', 'text-todos-head', `할 일 ${todos.length}개 · 남은 것 ${left}개`), ...todos.map((t) => {
+    const row = el('label', 'todo-row' + (t.done ? ' done' : ''));
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = t.done;
+    cb.onchange = () => {
+      if (!setTodoDone(pad.doc, t, cb.checked)) return renderTextTodos();
+      const ta = $('#text-page');
+      ta.value = page.text;
+      saveSoon();
+      renderTextTodos();
+    };
+    row.append(cb, el('span', 'todo-text', t.text));
+    return row;
+  }));
+}
+
+// 할 일 화면에서 바로 추가 → 오늘 날짜의 타자 메모 끝에 '☐ 내용'
+async function quickAddTodo(text) {
+  text = text.trim();
+  if (!text) return;
+  const ds = ymd(new Date());
+  const doc = await notes.get(ds);
+  let page = doc.pages.find((p) => p.kind === 'text');
+  if (!page) {
+    const empty = doc.pages.find((p) => !p.strokes.length && p.kind !== 'text');
+    if (empty) Object.assign(empty, { kind: 'text', text: '' });
+    else if (doc.pages.length < MAX_TABS) doc.pages.push(blankPage('text'));
+    else return toast(`오늘 탭이 ${MAX_TABS}개로 가득 찼어요`);
+    page = doc.pages.find((p) => p.kind === 'text');
+  }
+  page.text = (page.text && !page.text.endsWith('\n') ? page.text + '\n' : page.text || '') + '☐ ' + text;
+  await notes.put(ds, cloneDoc(doc));
+  listState.cache.set(ds, doc);
+  refreshDigest(ds, doc);
+  renderTodos();
+}
+
 // 타자 메모에서 할 일 줄 넣기 / 할 일 줄에서 엔터 치면 다음 줄도 ☐
 function insertTodo() {
   const ta = $('#text-page');
+  // 입력칸에 커서가 없으면 맨 끝에 추가
+  if (document.activeElement !== ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   const pos = ta.selectionStart, v = ta.value;
   const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
   const line = v.slice(lineStart, v.indexOf('\n', pos) < 0 ? v.length : v.indexOf('\n', pos));
@@ -950,8 +999,10 @@ function layoutPad() {
   ta.classList.toggle('hidden', !isText);
   if (isText) {
     if (ta.dataset.pageId !== pad.note.id) { ta.value = pad.note.text || ''; ta.dataset.pageId = pad.note.id; }
+    renderTextTodos();
     return;
   }
+  $('#text-todos').classList.add('hidden');
   ta.dataset.pageId = '';
   const wrap = $('#page-scroll');
   if (!wrap.clientWidth) return;
@@ -2060,6 +2111,7 @@ async function afterSignIn() {
     rerender();
     await notes.flush();
     autoOcr.scan();
+    gtasks.run(true);
   } catch (e) { handleErr(e); }
 }
 
@@ -2080,7 +2132,171 @@ async function refreshInBackground() {
     rerender();
     if (notes.pending.size) notes.flush();
     autoOcr.kick();
+    gtasks.run(true);
   } catch (e) { handleErr(e); }
+}
+
+// ---------- 구글 Tasks 연동 (양방향)
+// 할 일마다 Tasks의 '필기캘린더' 목록에 작업을 하나씩 만들고, 메모(notes)에 [hc:날짜:번호] 표시를 넣어 기기와 상관없이 찾음
+const TASKS = 'https://tasks.googleapis.com/tasks/v1';
+const TASKLIST_TITLE = '필기캘린더';
+const strHash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+const gtasks = {
+  listId: store.get('gtasksListId', null),
+  pushed: store.get('gtasksPushed', {}), // 할 일 키 → 마지막으로 맞춘 완료 여부 (어느 쪽이 바뀌었는지 판단)
+  dirty: new Set(),
+  timer: null,
+  running: null,
+  applying: false,
+  problem: null,
+  lastSync: 0,
+  on() { return store.get('gtasksOn', true) && !!CFG.GOOGLE_CLIENT_ID && auth.connected(); },
+  key(ds, t) { return `hc:${ds}:${strHash(t.pageId + '|' + t.text)}`; },
+  schedule(ds) {
+    if (this.applying || !this.on()) return;
+    this.dirty.add(ds);
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.run(false), 3000);
+  },
+  async api(path, opts = {}) {
+    try {
+      return await gapi(TASKS + path, opts.body ? { ...opts, headers: { 'Content-Type': 'application/json' } } : opts);
+    } catch (e) {
+      if (/HTTP 403/.test(e.message)) {
+        this.problem = /has not been used|is disabled|SERVICE_DISABLED/i.test(e.message) ? 'api' : 'scope';
+        renderTasksStatus();
+        e.silent = true;
+      }
+      throw e;
+    }
+  },
+  async ensureList() {
+    if (this.listId) return this.listId;
+    const r = await this.api('/users/@me/lists?maxResults=100');
+    const found = (r.items || []).find((l) => l.title === TASKLIST_TITLE);
+    this.listId = found ? found.id : (await this.api('/users/@me/lists', { method: 'POST', body: JSON.stringify({ title: TASKLIST_TITLE }) })).id;
+    store.set('gtasksListId', this.listId);
+    return this.listId;
+  },
+  async allTasks() {
+    const out = [];
+    let token = '';
+    do {
+      const r = await this.api(`/lists/${this.listId}/tasks?showCompleted=true&showHidden=true&maxResults=100${token ? '&pageToken=' + token : ''}`);
+      out.push(...(r.items || []));
+      token = r.nextPageToken || '';
+    } while (token);
+    return out;
+  },
+  run(full) {
+    if (!this.running) {
+      this.running = this._run(full)
+        .catch((e) => { if (e.message === 'AUTH' || !e.silent) handleErr(e); else console.warn('Tasks 연동', e.message); })
+        .finally(() => { this.running = null; if (this.dirty.size) this.schedule([...this.dirty][0]); });
+    }
+    return this.running;
+  },
+  async _run(full) {
+    if (!this.on()) return;
+    const dates = new Set(this.dirty);
+    this.dirty.clear();
+    try { await this.ensureList(); } catch (e) { if (/HTTP 404/.test(e.message)) { this.listId = null; await this.ensureList(); } else throw e; }
+    let tasks;
+    try { tasks = await this.allTasks(); }
+    catch (e) { if (!/HTTP 404/.test(e.message)) throw e; this.listId = null; store.del('gtasksListId'); await this.ensureList(); tasks = []; }
+    this.problem = null;
+    const byKey = new Map();
+    for (const t of tasks) {
+      const m = /\[(hc:(\d{4}-\d{2}-\d{2}):[0-9a-z]+)\]/.exec(t.notes || '');
+      if (!m) continue;
+      byKey.set(m[1], t);
+      // Tasks 앱에서 체크가 바뀐 날짜, 또는 전체 동기화면 Tasks에만 남은 날짜도 처리
+      const last = this.pushed[m[1]];
+      if (full || (last !== undefined && (t.status === 'completed') !== last)) dates.add(m[2]);
+    }
+    if (full) {
+      const since = ymd(addDays(new Date(), -60));
+      for (const d of allNoteDates()) if (d >= since) dates.add(d);
+    }
+    let changedAny = false;
+    for (const ds of dates) {
+      // 이 기기가 모르는 날짜는 메모 목록을 막 새로 받은 경우에만 처리 (실수로 Tasks를 지우지 않게)
+      if (!notes.has(ds) && Date.now() - notes.lastSync > 5 * 60000) continue;
+      const open = state.view === 'day' && state.date === ds;
+      const doc = open ? pad.doc : await notes.get(ds);
+      const seen = new Set();
+      let docChanged = false;
+      for (const t of todosOf(doc)) {
+        const k = this.key(ds, t);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const task = byKey.get(k);
+        const last = this.pushed[k];
+        if (!task) {
+          const d = parseYmd(ds);
+          await this.api(`/lists/${this.listId}/tasks`, { method: 'POST', body: JSON.stringify({
+            title: t.text,
+            notes: `필기캘린더 ${d.getMonth() + 1}월 ${d.getDate()}일 메모에서\n[${k}]`,
+            due: `${ds}T00:00:00.000Z`,
+            status: t.done ? 'completed' : 'needsAction',
+          }) });
+          this.pushed[k] = t.done;
+          continue;
+        }
+        const gDone = task.status === 'completed';
+        if (last === undefined) {
+          // 이 기기에서 처음 맞추는 할 일: 한쪽이라도 완료면 완료로
+          if (gDone && !t.done) { setTodoDone(doc, t, true); docChanged = true; }
+          else if (t.done && !gDone) await this.setStatus(task, true);
+          this.pushed[k] = gDone || t.done;
+        } else if (gDone !== last && t.done === last) {
+          setTodoDone(doc, t, gDone); // Tasks 앱에서 바뀜 → 메모에 반영
+          docChanged = true;
+          this.pushed[k] = gDone;
+        } else if (t.done !== gDone) {
+          await this.setStatus(task, t.done); // 앱에서 바뀜 → Tasks에 반영
+          this.pushed[k] = t.done;
+        }
+      }
+      // 메모에서 지운 할 일은 Tasks에서도 삭제
+      for (const [k, task] of byKey) {
+        if (!k.startsWith(`hc:${ds}:`) || seen.has(k)) continue;
+        await this.api(`/lists/${this.listId}/tasks/${task.id}`, { method: 'DELETE' }).catch((e) => { if (!/HTTP 404/.test(e.message)) throw e; });
+        delete this.pushed[k];
+      }
+      if (docChanged) {
+        changedAny = true;
+        this.applying = true;
+        try {
+          if (open) { saveSoon(); $('#text-page').dataset.pageId = ''; layoutPad(); renderTextTodos(); }
+          else await notes.put(ds, doc);
+        } finally { this.applying = false; }
+        listState.cache.set(ds, doc);
+        refreshDigest(ds, doc);
+      }
+      store.set('gtasksPushed', this.pushed);
+    }
+    this.lastSync = Date.now();
+    renderTasksStatus();
+    if (changedAny && state.view === 'month') renderMonth();
+  },
+  setStatus(task, done) {
+    return this.api(`/lists/${this.listId}/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(done ? { status: 'completed' } : { status: 'needsAction', completed: null }) });
+  },
+};
+
+function renderTasksStatus() {
+  const el2 = $('#gtasks-status');
+  if (!el2) return;
+  const on = store.get('gtasksOn', true);
+  document.querySelectorAll('#gtasks-seg button').forEach((b) => b.classList.toggle('active', (b.dataset.on === '1') === on));
+  $('#gtasks-reauth').classList.toggle('hidden', !(on && gtasks.problem === 'scope'));
+  el2.textContent = !on ? '꺼져 있어요'
+    : !auth.connected() ? '구글 로그인 후 연동돼요'
+    : gtasks.problem === 'api' ? '구글 클라우드에서 Tasks API를 켜야 해요'
+    : gtasks.problem === 'scope' ? 'Tasks 권한이 필요해요. 아래 버튼으로 다시 연결해 주세요'
+    : gtasks.lastSync ? `Tasks '${TASKLIST_TITLE}' 목록과 연동됨 · ${hm(new Date(gtasks.lastSync))}`
+    : '연동 준비 중…';
 }
 
 // ---------- 설정: 글자 크기 · 화면 모드
@@ -2287,6 +2503,13 @@ function bindPad() {
   // 키보드 메모
   const ta = $('#text-page');
   ta.addEventListener('input', () => {
+    // 줄 맨 앞에 '[]'+스페이스 → ☐
+    const pos = ta.selectionStart, v = ta.value;
+    const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
+    const m = /^(\s*(?:[-*•]\s*)?)\[\] $/.exec(v.slice(lineStart, pos));
+    if (m) ta.setRangeText(m[1] + '☐ ', lineStart, pos, 'end');
+    clearTimeout(ta._todoTimer);
+    ta._todoTimer = setTimeout(renderTextTodos, 300);
     if (pad.note.kind !== 'text' || ta.dataset.pageId !== pad.note.id) return;
     pad.note.text = ta.value;
     const label = document.querySelector('.page-tab.active .page-tab-label');
@@ -2305,6 +2528,23 @@ function bindPad() {
     else ta.setRangeText(`\n${m[1]}${m[2].startsWith('[') ? '[ ]' : '☐'} `, pos, pos, 'end');
     ta.dispatchEvent(new Event('input'));
   });
+  $('#todo-add').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    const v = e.target.value;
+    e.target.value = '';
+    quickAddTodo(v).catch(handleErr);
+  });
+  // 구글 Tasks 연동 설정
+  $('#gtasks-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    store.set('gtasksOn', b.dataset.on === '1');
+    renderTasksStatus();
+    if (b.dataset.on === '1') gtasks.run(true);
+  });
+  $('#gtasks-reauth').onclick = () => connect('').then(() => gtasks.run(true)).catch(handleErr);
+  $('#settings-btn').addEventListener('click', renderTasksStatus);
   $('#todo-show-done').addEventListener('change', (e) => {
     todoState.showDone = e.target.checked;
     store.set('todoShowDone', todoState.showDone);

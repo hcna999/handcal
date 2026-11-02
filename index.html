@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=24">
-<script src="config.js?v=24"></script>
+<link rel="stylesheet" href="style.css?v=25">
+<script src="config.js?v=25"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=24"></script>
-<script src="app.js?v=24" defer></script>
+<script src="vendor/perfect-freehand.js?v=25"></script>
+<script src="app.js?v=25" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -74,6 +74,15 @@
             <button data-theme="dark">다크</button>
           </div>
         </div>
+        <div class="settings-row">
+          <span class="settings-label">구글 Tasks 할 일 연동</span>
+          <div class="seg" id="gtasks-seg">
+            <button data-on="1">켜기</button>
+            <button data-on="0">끄기</button>
+          </div>
+          <span id="gtasks-status" class="settings-label"></span>
+          <button id="gtasks-reauth" class="pill primary hidden">구글 다시 연결</button>
+        </div>
       </div>
     </div>
   </div>
@@ -96,6 +105,7 @@
         <strong id="todo-count"></strong>
         <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료한 것도 보기</label>
       </div>
+      <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터)" aria-label="오늘 할 일 추가" enterkeyhint="done">
       <div id="todo-items"></div>
     </div>
   </section>
@@ -159,6 +169,7 @@
           <div id="loading" class="loading hidden">불러오는 중…</div>
         </div>
         <button id="add-page" class="pill">+ 종이 아래로 늘리기</button>
+        <div id="text-todos" class="text-todos hidden"></div>
         <textarea id="text-page" class="text-page hidden" placeholder="키보드로 메모를 입력하세요 (휴대폰 키보드·블루투스 키보드 모두 가능)" aria-label="키보드 메모"></textarea>
       </div>
     </div>
