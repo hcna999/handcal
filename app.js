@@ -2137,13 +2137,16 @@ async function refreshInBackground() {
 }
 
 // ---------- 구글 Tasks 연동 (양방향)
-// 할 일마다 Tasks의 '필기캘린더' 목록에 작업을 하나씩 만들고, 메모(notes)에 [hc:날짜:번호] 표시를 넣어 기기와 상관없이 찾음
+// 할 일마다 Tasks의 '필기캘린더' 목록에 작업을 하나씩 만듦.
+// 어느 할 일이 어느 작업인지(키 → 작업 id, 마지막으로 맞춘 완료 여부)는 드라이브의 gtasks.json에 저장해 기기끼리 공유
 const TASKS = 'https://tasks.googleapis.com/tasks/v1';
 const TASKLIST_TITLE = '필기캘린더';
+const MARKER_RE = /\s*\[(hc:(\d{4}-\d{2}-\d{2}):[0-9a-z]+)\]\s*/; // 예전 버전이 메모에 넣던 꼬리표
 const strHash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const gtasks = {
   listId: store.get('gtasksListId', null),
-  pushed: store.get('gtasksPushed', {}), // 할 일 키 → 마지막으로 맞춘 완료 여부 (어느 쪽이 바뀌었는지 판단)
+  map: store.get('gtasksMap', {}), // 키 → { id, done, t }
+  mapFileId: null,
   dirty: new Set(),
   timer: null,
   running: null,
@@ -2158,6 +2161,12 @@ const gtasks = {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.run(false), 3000);
   },
+  setEntry(k, v) {
+    if (v) this.map[k] = { ...v, t: Date.now() };
+    else this.map[k] = { deleted: true, t: Date.now() };
+    this.mapChanged = true;
+  },
+  entry(k) { const e = this.map[k]; return e && !e.deleted ? e : null; },
   async api(path, opts = {}) {
     try {
       return await gapi(TASKS + path, opts.body ? { ...opts, headers: { 'Content-Type': 'application/json' } } : opts);
@@ -2168,6 +2177,31 @@ const gtasks = {
         e.silent = true;
       }
       throw e;
+    }
+  },
+  // 드라이브의 연결표와 합치기 (항목마다 더 최근 것)
+  async syncMap(upload) {
+    if (!this.mapFileId) {
+      const fid = await drive.ensureFolder();
+      const q = encodeURIComponent(`'${fid}' in parents and name='gtasks.json' and trashed=false`);
+      this.mapFileId = (await gapi(`${DRIVE}?q=${q}&fields=files(id)`)).files[0]?.id || null;
+    }
+    let remote = {};
+    if (this.mapFileId) {
+      const d = await drive.read(this.mapFileId);
+      remote = (typeof d === 'string' ? JSON.parse(d) : d)?.map || {};
+    }
+    const merged = { ...remote };
+    for (const [k, v] of Object.entries(this.map)) if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
+    // 오래된 삭제 표시는 정리
+    const cutoff = Date.now() - 60 * 86400e3;
+    for (const [k, v] of Object.entries(merged)) if (v.deleted && v.t < cutoff) delete merged[k];
+    this.map = merged;
+    store.set('gtasksMap', this.map);
+    if (upload && JSON.stringify(merged) !== JSON.stringify(remote)) {
+      const payload = { v: 1, map: merged };
+      if (this.mapFileId) await drive.update(this.mapFileId, payload);
+      else this.mapFileId = (await drive.create('gtasks.json', payload)).id;
     }
   },
   async ensureList() {
@@ -2200,24 +2234,41 @@ const gtasks = {
     if (!this.on()) return;
     const dates = new Set(this.dirty);
     this.dirty.clear();
-    try { await this.ensureList(); } catch (e) { if (/HTTP 404/.test(e.message)) { this.listId = null; await this.ensureList(); } else throw e; }
+    this.mapChanged = false;
+    await this.syncMap(false);
     let tasks;
-    try { tasks = await this.allTasks(); }
-    catch (e) { if (!/HTTP 404/.test(e.message)) throw e; this.listId = null; store.del('gtasksListId'); await this.ensureList(); tasks = []; }
+    try { await this.ensureList(); tasks = await this.allTasks(); }
+    catch (e) {
+      if (!/HTTP 404/.test(e.message)) throw e;
+      this.listId = null;
+      store.del('gtasksListId');
+      await this.ensureList();
+      tasks = [];
+      // 목록을 새로 만들었으면 예전 연결표는 무의미
+      for (const k of Object.keys(this.map)) this.setEntry(k, null);
+    }
     this.problem = null;
-    const byKey = new Map();
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const dateOf = (k) => k.slice(3, 13);
+    // 예전 꼬리표가 붙은 작업은 연결표로 옮기고 메모에서 꼬리표 지우기
     for (const t of tasks) {
-      const m = /\[(hc:(\d{4}-\d{2}-\d{2}):[0-9a-z]+)\]/.exec(t.notes || '');
+      const m = MARKER_RE.exec(t.notes || '');
       if (!m) continue;
-      byKey.set(m[1], t);
-      // Tasks 앱에서 체크가 바뀐 날짜, 또는 전체 동기화면 Tasks에만 남은 날짜도 처리
-      const last = this.pushed[m[1]];
-      if (full || (last !== undefined && (t.status === 'completed') !== last)) dates.add(m[2]);
+      if (!this.entry(m[1])) this.setEntry(m[1], { id: t.id, done: t.status === 'completed' });
+      t.notes = (t.notes || '').replace(MARKER_RE, '').trim();
+      await this.api(`/lists/${this.listId}/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify({ notes: t.notes }) });
+    }
+    // Tasks 앱에서 체크가 바뀐 날짜 찾기
+    for (const [k, e] of Object.entries(this.map)) {
+      if (e.deleted) continue;
+      const task = byId.get(e.id);
+      if (full || (task && (task.status === 'completed') !== e.done)) dates.add(dateOf(k));
     }
     if (full) {
       const since = ymd(addDays(new Date(), -60));
       for (const d of allNoteDates()) if (d >= since) dates.add(d);
     }
+    const usedIds = new Set(Object.values(this.map).filter((e) => !e.deleted).map((e) => e.id));
     let changedAny = false;
     for (const ds of dates) {
       // 이 기기가 모르는 날짜는 메모 목록을 막 새로 받은 경우에만 처리 (실수로 Tasks를 지우지 않게)
@@ -2230,39 +2281,49 @@ const gtasks = {
         const k = this.key(ds, t);
         if (seen.has(k)) continue;
         seen.add(k);
-        const task = byKey.get(k);
-        const last = this.pushed[k];
+        let e = this.entry(k);
+        let task = e && byId.get(e.id);
+        if (e && !task) continue; // Tasks 앱에서 지운 작업은 다시 만들지 않음
+        if (!task) {
+          // 연결표가 늦게 온 경우: 같은 날짜·같은 제목의 작업이 있으면 그걸 씀 (중복 방지)
+          task = tasks.find((x) => !usedIds.has(x.id) && x.title === t.text && (x.due || '').startsWith(ds));
+          if (task) { usedIds.add(task.id); e = { id: task.id, done: undefined }; }
+        }
         if (!task) {
           const d = parseYmd(ds);
-          await this.api(`/lists/${this.listId}/tasks`, { method: 'POST', body: JSON.stringify({
+          const created = await this.api(`/lists/${this.listId}/tasks`, { method: 'POST', body: JSON.stringify({
             title: t.text,
-            notes: `필기캘린더 ${d.getMonth() + 1}월 ${d.getDate()}일 메모에서\n[${k}]`,
+            notes: `필기캘린더 ${d.getMonth() + 1}월 ${d.getDate()}일 메모`,
             due: `${ds}T00:00:00.000Z`,
             status: t.done ? 'completed' : 'needsAction',
           }) });
-          this.pushed[k] = t.done;
+          usedIds.add(created.id);
+          this.setEntry(k, { id: created.id, done: t.done });
           continue;
         }
         const gDone = task.status === 'completed';
+        const last = e.done;
+        let next = last;
         if (last === undefined) {
-          // 이 기기에서 처음 맞추는 할 일: 한쪽이라도 완료면 완료로
+          // 처음 맞추는 할 일: 한쪽이라도 완료면 완료로
           if (gDone && !t.done) { setTodoDone(doc, t, true); docChanged = true; }
           else if (t.done && !gDone) await this.setStatus(task, true);
-          this.pushed[k] = gDone || t.done;
+          next = gDone || t.done;
         } else if (gDone !== last && t.done === last) {
           setTodoDone(doc, t, gDone); // Tasks 앱에서 바뀜 → 메모에 반영
           docChanged = true;
-          this.pushed[k] = gDone;
+          next = gDone;
         } else if (t.done !== gDone) {
           await this.setStatus(task, t.done); // 앱에서 바뀜 → Tasks에 반영
-          this.pushed[k] = t.done;
+          next = t.done;
         }
+        if (next !== e.done || e.id !== this.map[k]?.id) this.setEntry(k, { id: task.id, done: next });
       }
       // 메모에서 지운 할 일은 Tasks에서도 삭제
-      for (const [k, task] of byKey) {
-        if (!k.startsWith(`hc:${ds}:`) || seen.has(k)) continue;
-        await this.api(`/lists/${this.listId}/tasks/${task.id}`, { method: 'DELETE' }).catch((e) => { if (!/HTTP 404/.test(e.message)) throw e; });
-        delete this.pushed[k];
+      for (const [k, e] of Object.entries(this.map)) {
+        if (e.deleted || dateOf(k) !== ds || seen.has(k)) continue;
+        if (byId.has(e.id)) await this.api(`/lists/${this.listId}/tasks/${e.id}`, { method: 'DELETE' }).catch((err) => { if (!/HTTP 404/.test(err.message)) throw err; });
+        this.setEntry(k, null);
       }
       if (docChanged) {
         changedAny = true;
@@ -2274,8 +2335,9 @@ const gtasks = {
         listState.cache.set(ds, doc);
         refreshDigest(ds, doc);
       }
-      store.set('gtasksPushed', this.pushed);
     }
+    if (this.mapChanged) await this.syncMap(true);
+    else store.set('gtasksMap', this.map);
     this.lastSync = Date.now();
     renderTasksStatus();
     if (changedAny && state.view === 'month') renderMonth();
