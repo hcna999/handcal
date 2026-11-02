@@ -494,3 +494,5 @@ canvas { display: block; touch-action: none; }
 #list-more { align-self: center; }
 .week-grid .wday { display: none; } /* 넓은 화면은 위 요일 머리글 사용 */
 @media (max-width: 599px) { .week-grid .wday { display: inline; } }
+/* 탭 줄 오른쪽 끝: 타자 ↔ 손글씨 전환 */
+.page-tab.kind-toggle { margin-left: auto; border-color: var(--accent-border); color: var(--accent); font-weight: 600; }

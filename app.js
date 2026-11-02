@@ -240,7 +240,8 @@ const MAX_TABS = 5;
 const newPageId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 // kind: 'ink'(손글씨) 또는 'text'(키보드 메모)
 const blankPage = (kind = 'ink') => (kind === 'text' ? { id: newPageId(), kind, height: PAGE_H, strokes: [], text: '' } : { id: newPageId(), height: PAGE_H, strokes: [] });
-const blankNote = () => ({ v: 2, pages: [blankPage()], updated: 0 });
+// 새 날짜는 키보드 메모로 시작 (버튼으로 손글씨 전환)
+const blankNote = () => ({ v: 2, pages: [blankPage('text')], updated: 0 });
 const normPage = (p, id) => ({
   id: p?.id || id,
   height: Math.max(PAGE_H, Number(p?.height) || PAGE_H),
@@ -850,7 +851,8 @@ const pad = {
   tool: 'pen',
   colors: store.get('colors', { pen: COLORS[0], hl: '#facc15' }),
   sizeIdx: store.get('sizeIdx', 1),
-  fingerDraw: store.get('fingerDraw', !isIPad()),
+  // 손가락은 기본으로 화면 이동, 필기는 펜으로만
+  fingerDraw: store.get('fingerDraw2', false),
   recentTouch: [],
   penSeen: store.get('penSeen', false),
   active: null,
@@ -1234,7 +1236,7 @@ function dropRecentTouchStrokes() {
 
 function setFingerDraw(v) {
   pad.fingerDraw = v;
-  store.set('fingerDraw', v);
+  store.set('fingerDraw2', v);
   $('#finger-mode').textContent = v ? '손가락: 필기' : '손가락: 화면 이동';
 }
 
@@ -1315,6 +1317,7 @@ async function openDay(ds, { push = true } = {}) {
     renderTabs();
     renderOcr();
     layoutPad();
+    if (pad.note.kind === 'text') focusText();
   } catch (e) {
     handleErr(e);
   } finally {
@@ -1348,7 +1351,7 @@ function tabLabel(page, i) {
     return '⌨ ' + (first ? first.slice(0, 10) : `메모 ${i + 1}`);
   }
   const first = (page.ocr?.text || '').split('\n').map((l) => l.replace(/^[-•\d.\s]+/, '').trim()).find(Boolean);
-  return first ? first.slice(0, 10) : `필기 ${i + 1}`;
+  return '✍ ' + (first ? first.slice(0, 10) : `필기 ${i + 1}`);
 }
 
 function renderTabs() {
@@ -1370,13 +1373,17 @@ function renderTabs() {
     return b;
   });
   if (pages.length < MAX_TABS) {
-    for (const [kind, label, title] of [['ink', '+ 필기', '새 손글씨 탭'], ['text', '+ 타자', '새 키보드 메모 탭']]) {
-      const add = el('button', 'page-tab add', label);
-      add.title = `${title} (최대 ${MAX_TABS}개)`;
-      add.onclick = () => addPage(kind);
-      items.push(add);
-    }
+    const add = el('button', 'page-tab add', '+');
+    add.title = `새 메모 탭 (최대 ${MAX_TABS}개)`;
+    add.setAttribute('aria-label', '새 메모 탭');
+    add.onclick = () => addPage('text');
+    items.push(add);
   }
+  const toInk = pad.note.kind === 'text';
+  const kindBtn = el('button', 'page-tab kind-toggle', toInk ? '✍ 필기로' : '⌨ 타자로');
+  kindBtn.title = toInk ? '손글씨로 쓰기' : '키보드로 쓰기';
+  kindBtn.onclick = toggleKind;
+  items.push(kindBtn);
   bar.replaceChildren(...items);
 }
 
@@ -1392,14 +1399,34 @@ function switchPage(i) {
   layoutPad();
 }
 
-function addPage(kind = 'ink') {
+function addPage(kind = 'text') {
   if (pad.loading) return;
-  // 지금 탭이 아무것도 없는 필기 탭이면 새로 만들지 않고 타자 탭으로 바꿈
-  if (kind === 'text') return openTextTab();
-  if (pad.doc.pages.length >= MAX_TABS) return;
+  if (pad.doc.pages.length >= MAX_TABS) return toast(`탭은 최대 ${MAX_TABS}개예요`);
   pad.doc.pages.push(blankPage(kind));
   switchPage(pad.doc.pages.length - 1);
-  if (kind === 'text') $('#text-page').focus();
+  if (kind === 'text') focusText();
+}
+
+// 지금 탭을 타자 ↔ 손글씨로 바꿈. 이미 내용이 있으면 바꾸지 않고 그 종류의 새 탭을 엶
+function toggleKind() {
+  if (pad.loading || pad.active) return;
+  const cur = pad.note, toInk = cur.kind === 'text';
+  const empty = toInk ? !(cur.text || '').trim() : !cur.strokes.length;
+  if (!empty) return addPage(toInk ? 'ink' : 'text');
+  if (toInk) { delete cur.kind; delete cur.text; }
+  else { Object.assign(cur, { kind: 'text', text: '' }); delete cur.ocr; }
+  pad.undo = [];
+  pad.redo = [];
+  updateUndoUI();
+  renderTabs();
+  renderOcr();
+  layoutPad();
+  if (!toInk) focusText();
+}
+
+// 마우스·키보드 기기에서만 바로 입력 칸에 커서 (휴대폰은 키보드가 갑자기 올라오지 않게)
+function focusText() {
+  if (!window.matchMedia('(pointer: coarse)').matches) $('#text-page').focus();
 }
 
 // 키보드 메모 탭으로 이동 (없으면 만들거나, 지금 탭이 빈 필기면 타자 탭으로 바꿈)
@@ -1459,7 +1486,7 @@ function setPanel(visible) {
   const toggled = isNarrow() ? visible : !visible;
   if (body.classList.contains('panel-toggled') === toggled) return;
   body.classList.toggle('panel-toggled', toggled);
-  if (!isNarrow()) { store.set('panelHidden', !visible); layoutPad(); }
+  if (!isNarrow()) { store.set('panelHidden2', !visible); layoutPad(); }
   syncPanelButton();
 }
 function panelVisible() {
@@ -2155,7 +2182,7 @@ function bindPad() {
   // 일정·요약 패널
   $('#panel-toggle').onclick = () => setPanel(!panelVisible());
   $('#panel-close').onclick = () => setPanel(false);
-  if (store.get('panelHidden', false)) $('.day-body').classList.add('panel-toggled');
+  if (store.get('panelHidden2', true)) $('.day-body').classList.add('panel-toggled');
   if (isNarrow()) $('.day-body').classList.remove('panel-toggled');
   syncPanelButton();
   // 시트가 열린 채로 필기장을 누르면 시트를 닫음
@@ -2201,7 +2228,7 @@ function bindPad() {
       // 폴드를 접고 펼쳐 좁은/넓은 화면이 바뀌면 패널 상태를 그 화면 기본값으로
       if (isNarrow() !== lastNarrow) {
         lastNarrow = isNarrow();
-        $('.day-body').classList.toggle('panel-toggled', !lastNarrow && store.get('panelHidden', false));
+        $('.day-body').classList.toggle('panel-toggled', !lastNarrow && store.get('panelHidden2', true));
         syncPanelButton();
       }
       settings.apply();
