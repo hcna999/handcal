@@ -24,11 +24,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=23">
-<script src="config.js?v=23"></script>
+<link rel="stylesheet" href="style.css?v=24">
+<script src="config.js?v=24"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=23"></script>
-<script src="app.js?v=23" defer></script>
+<script src="vendor/perfect-freehand.js?v=24"></script>
+<script src="app.js?v=24" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -41,6 +41,7 @@
       <button data-view="month">월</button>
       <button data-view="week">주</button>
       <button data-view="list">메모</button>
+      <button data-view="todo">할 일</button>
     </div>
   </div>
   <div id="day-nav" class="nav hidden">
@@ -89,6 +90,13 @@
       <input id="list-search" type="search" placeholder="메모 검색" aria-label="메모 검색">
       <div id="list-items"></div>
       <button id="list-more" class="pill hidden">더 보기</button>
+    </div>
+    <div id="todo-view" class="list-view hidden">
+      <div class="todo-bar">
+        <strong id="todo-count"></strong>
+        <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료한 것도 보기</label>
+      </div>
+      <div id="todo-items"></div>
     </div>
   </section>
 

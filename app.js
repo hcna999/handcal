@@ -558,11 +558,13 @@ function renderMonth() {
   $('#view-seg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.calView));
   const v = state.calView;
   $('#grid').classList.toggle('hidden', v !== 'month');
-  $('.weekdays').classList.toggle('hidden', v === 'list');
+  $('.weekdays').classList.toggle('hidden', v === 'list' || v === 'todo');
+  $('#todo-view').classList.toggle('hidden', v !== 'todo');
   $('#month-view').classList.toggle('week-mode', v === 'week');
   $('#week-grid').classList.toggle('hidden', v !== 'week');
   $('#list-view').classList.toggle('hidden', v !== 'list');
-  for (const id of ['#prev-month', '#next-month', '#today-btn']) $(id).classList.toggle('hidden', v === 'list');
+  for (const id of ['#prev-month', '#next-month', '#today-btn']) $(id).classList.toggle('hidden', v === 'list' || v === 'todo');
+  if (v === 'todo') return renderTodos();
   if (v === 'week') return renderWeek();
   if (v === 'list') return renderList();
   return renderMonthView();
@@ -703,6 +705,83 @@ function listItem(ds, prev) {
     }
   }
   return item;
+}
+
+// ---------- 할 일 모아보기: 모든 날짜의 할 일을 체크하면 원래 메모에도 반영
+const todoState = { token: 0, showDone: store.get('todoShowDone', false) };
+async function renderTodos() {
+  $('#month-title').textContent = '할 일 모아보기';
+  $('#todo-show-done').checked = todoState.showDone;
+  const token = ++todoState.token;
+  const box = $('#todo-items');
+  if (!box.children.length) box.replaceChildren(el('p', 'muted-text', '불러오는 중…'));
+  const groups = [];
+  let left = 0;
+  for (const ds of allNoteDates()) {
+    let doc = listState.cache.get(ds);
+    if (!doc) {
+      try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
+      if (token !== todoState.token) return;
+    }
+    const all = todosOf(doc);
+    left += all.filter((t) => !t.done).length;
+    const shown = all.filter((t) => todoState.showDone || !t.done);
+    if (shown.length) groups.push({ ds, todos: shown });
+  }
+  if (token !== todoState.token) return;
+  $('#todo-count').textContent = `남은 할 일 ${left}개`;
+  if (!groups.length) {
+    box.replaceChildren(el('p', 'muted-text', left || todoState.showDone ? '할 일이 없어요.' : '남은 할 일이 없어요. 타자 메모에서 ☐ 버튼으로 할 일을 적거나, 손글씨로 쓰면 AI가 할 일을 찾아줘요.'));
+    return;
+  }
+  box.replaceChildren(...groups.map(({ ds, todos }) => {
+    const d = parseYmd(ds);
+    const sec = el('section', 'todo-group');
+    const head = el('button', 'todo-date', `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`);
+    head.title = '이 날짜 열기';
+    head.onclick = () => openDay(ds);
+    sec.append(head);
+    for (const t of todos) {
+      const row = el('label', 'todo-row' + (t.done ? ' done' : ''));
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = t.done;
+      cb.onchange = () => toggleTodo(ds, t, cb.checked, row);
+      row.append(cb, el('span', 'todo-text', t.text));
+      if (t.kind === 'ocr') row.append(el('span', 'todo-src', '✍'));
+      sec.append(row);
+    }
+    return sec;
+  }));
+}
+
+async function toggleTodo(ds, t, done, row) {
+  const doc = listState.cache.get(ds) || (await notes.get(ds));
+  if (!setTodoDone(doc, t, done)) return toast('메모가 바뀌어서 다시 불러올게요');
+  t.done = done;
+  row.classList.toggle('done', done);
+  try {
+    await notes.put(ds, cloneDoc(doc));
+    refreshDigest(ds, doc);
+  } catch (e) { handleErr(e); }
+  // 완료한 항목은 잠깐 보여준 뒤 목록에서 정리
+  setTimeout(() => { if (state.calView === 'todo' && state.view === 'month') renderTodos(); }, done && !todoState.showDone ? 700 : 0);
+}
+
+// 타자 메모에서 할 일 줄 넣기 / 할 일 줄에서 엔터 치면 다음 줄도 ☐
+function insertTodo() {
+  const ta = $('#text-page');
+  const pos = ta.selectionStart, v = ta.value;
+  const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
+  const line = v.slice(lineStart, v.indexOf('\n', pos) < 0 ? v.length : v.indexOf('\n', pos));
+  if (TODO_RE.test(line)) { ta.focus(); return; }
+  if (line.trim()) {
+    ta.setRangeText('\n☐ ', pos, pos, 'end');
+  } else {
+    ta.setRangeText('☐ ', lineStart, lineStart, 'end');
+  }
+  ta.focus();
+  ta.dispatchEvent(new Event('input'));
 }
 
 async function renderMonthView() {
@@ -1380,6 +1459,13 @@ function renderTabs() {
     items.push(add);
   }
   const toInk = pad.note.kind === 'text';
+  if (toInk) {
+    const todoBtn = el('button', 'page-tab todo-insert', '☐ 할 일');
+    todoBtn.title = '할 일 줄 넣기';
+    todoBtn.addEventListener('pointerdown', (e) => e.preventDefault()); // 입력칸 포커스 유지
+    todoBtn.onclick = insertTodo;
+    items.push(todoBtn);
+  }
   const kindBtn = el('button', 'page-tab kind-toggle', toInk ? '✍ 필기로' : '⌨ 타자로');
   kindBtn.title = toInk ? '손글씨로 쓰기' : '키보드로 쓰기';
   kindBtn.onclick = toggleKind;
@@ -1572,15 +1658,51 @@ const needsOcr = (note) => !!note?.strokes?.length && (!note.ocr || (note.ocr.si
 const docNeedsOcr = (doc) => doc.pages.some(needsOcr);
 // 달력 칸 요약: 탭마다 한 줄씩 이어 붙이고 할 일 개수는 합침
 const firstLine = (t) => (t || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+// 할 일: 타자 메모에서 ☐/[ ]로 시작하는 줄(☑/[x]는 완료) + 손글씨 AI가 뽑은 할 일
+const TODO_RE = /^(\s*(?:[-*•]\s*)?)(\[[ xX]\]|☐|☑|□|✅)\s*(.*)$/;
+function todosOf(doc) {
+  const out = [];
+  for (const p of doc.pages) {
+    if (p.kind === 'text') {
+      (p.text || '').split('\n').forEach((line, li) => {
+        const m = TODO_RE.exec(line);
+        if (m && m[3].trim()) out.push({ pageId: p.id, kind: 'text', line: li, text: m[3].trim(), done: /[xX☑✅]/.test(m[2]) });
+      });
+    } else if (p.ocr?.todos?.length && p.strokes.length) {
+      p.ocr.todos.forEach((t, i) => out.push({ pageId: p.id, kind: 'ocr', idx: i, text: t, done: !!p.ocr.done?.[i] }));
+    }
+  }
+  return out;
+}
+function setTodoDone(doc, t, done) {
+  const p = doc.pages.find((x) => x.id === t.pageId);
+  if (!p) return false;
+  if (t.kind === 'text') {
+    const lines = (p.text || '').split('\n');
+    const m = TODO_RE.exec(lines[t.line] || '');
+    if (!m) return false;
+    const box = m[2].startsWith('[') ? (done ? '[x]' : '[ ]') : done ? '☑' : '☐';
+    lines[t.line] = `${m[1]}${box} ${m[3]}`;
+    p.text = lines.join('\n');
+  } else {
+    if (!p.ocr) return false;
+    p.ocr.done = p.ocr.done || [];
+    p.ocr.done[t.idx] = done;
+  }
+  return true;
+}
+
 function digestOf(doc) {
   const parts = [];
-  let todos = 0;
   for (const p of doc.pages) {
-    if (p.kind === 'text') { if (firstLine(p.text)) parts.push(firstLine(p.text).slice(0, 80)); }
-    else if (p.ocr && p.strokes.length) { parts.push(digestLine(p.ocr)); todos += p.ocr.todos?.length || 0; }
+    if (p.kind === 'text') {
+      const line = firstLine(p.text).replace(TODO_RE, '$3').trim();
+      if (line) parts.push(line.slice(0, 80));
+    } else if (p.ocr && p.strokes.length) parts.push(digestLine(p.ocr));
   }
   const text = parts.filter(Boolean).join(' · ').slice(0, 120);
-  return text ? { text, todos } : null;
+  const todos = todosOf(doc).filter((t) => !t.done).length; // 남은 할 일만
+  return text || todos ? { text: text || `할 일 ${todos}개`, todos } : null;
 }
 function refreshDigest(date, doc) {
   const d = digestOf(doc), cur = digests.get(date);
@@ -1653,11 +1775,16 @@ async function ocrRequest(image, date) {
 // 변환 결과를 노트에 저장하고 달력용 요약을 갱신. 그사이 필기가 바뀌었으면 false
 async function applyOcr(date, pageId, data, sig) {
   const ocr = { text: data.text, summary: data.summary, todos: data.todos, decisions: data.decisions, at: Date.now(), sig };
+  const keepDone = (page) => {
+    const prev = page.ocr;
+    if (prev?.done) ocr.done = (ocr.todos || []).map((t) => !!prev.done[(prev.todos || []).indexOf(t)]);
+  };
   let doc;
   if (state.date === date) {
     doc = pad.doc;
     const page = doc.pages.find((p) => p.id === pageId);
     if (!page || inkSig(page) !== sig) return false;
+    keepDone(page);
     page.ocr = ocr;
     saveSoon();
     renderOcr();
@@ -1666,6 +1793,7 @@ async function applyOcr(date, pageId, data, sig) {
     doc = await notes.get(date);
     const page = doc.pages.find((p) => p.id === pageId);
     if (!page || inkSig(page) !== sig) return false;
+    keepDone(page);
     page.ocr = ocr;
     await notes.put(date, doc);
   }
@@ -2166,6 +2294,22 @@ function bindPad() {
     saveSoon();
   });
   ta.addEventListener('blur', () => saveNow());
+  ta.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || e.shiftKey) return;
+    const pos = ta.selectionStart, v = ta.value;
+    const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
+    const m = TODO_RE.exec(v.slice(lineStart, pos));
+    if (!m) return;
+    e.preventDefault();
+    if (!m[3].trim()) ta.setRangeText('', lineStart, pos, 'end'); // 빈 할 일 줄에서 엔터 → 할 일 끝내기
+    else ta.setRangeText(`\n${m[1]}${m[2].startsWith('[') ? '[ ]' : '☐'} `, pos, pos, 'end');
+    ta.dispatchEvent(new Event('input'));
+  });
+  $('#todo-show-done').addEventListener('change', (e) => {
+    todoState.showDone = e.target.checked;
+    store.set('todoShowDone', todoState.showDone);
+    renderTodos();
+  });
 
   // 필기 → 글자
   $('#ocr-btn').onclick = runOcr;

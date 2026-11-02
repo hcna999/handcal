@@ -496,3 +496,17 @@ canvas { display: block; touch-action: none; }
 @media (max-width: 599px) { .week-grid .wday { display: inline; } }
 /* 탭 줄 오른쪽 끝: 타자 ↔ 손글씨 전환 */
 .page-tab.kind-toggle { margin-left: auto; border-color: var(--accent-border); color: var(--accent); font-weight: 600; }
+
+/* ---------- 할 일 */
+.todo-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px; }
+.todo-toggle { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+#todo-items { display: flex; flex-direction: column; gap: 10px; }
+.todo-group { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 10px; display: flex; flex-direction: column; }
+.todo-date { align-self: flex-start; font-weight: 700; padding: 4px 2px; min-height: 0; color: var(--text); }
+.todo-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: 0.95rem; cursor: pointer; }
+.todo-row input { width: 1.15rem; height: 1.15rem; accent-color: var(--accent); flex-shrink: 0; }
+.todo-text { flex: 1; min-width: 0; word-break: break-word; }
+.todo-row.done .todo-text { text-decoration: line-through; color: var(--muted); }
+.todo-src { font-size: 0.8rem; color: var(--muted); }
+.page-tab.todo-insert { margin-left: auto; }
+.page-tab.todo-insert + .kind-toggle { margin-left: 0; }
