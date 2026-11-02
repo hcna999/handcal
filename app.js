@@ -795,20 +795,26 @@ function renderTextTodos() {
 }
 
 // 할 일 화면에서 바로 추가 → 오늘 날짜의 타자 메모 끝에 '☐ 내용'
-async function quickAddTodo(text) {
-  text = text.trim();
-  if (!text) return;
-  const ds = ymd(new Date());
-  const doc = await notes.get(ds);
+// 그 날짜의 타자 메모 탭 끝에 '☐ 내용'을 붙임 (탭이 없으면 만듦). 붙인 탭을 돌려줌, 탭이 가득이면 null
+function appendTodoLine(doc, text) {
   let page = doc.pages.find((p) => p.kind === 'text');
   if (!page) {
     const empty = doc.pages.find((p) => !p.strokes.length && p.kind !== 'text');
     if (empty) Object.assign(empty, { kind: 'text', text: '' });
     else if (doc.pages.length < MAX_TABS) doc.pages.push(blankPage('text'));
-    else return toast(`오늘 탭이 ${MAX_TABS}개로 가득 찼어요`);
+    else return null;
     page = doc.pages.find((p) => p.kind === 'text');
   }
   page.text = (page.text && !page.text.endsWith('\n') ? page.text + '\n' : page.text || '') + '☐ ' + text;
+  return page;
+}
+
+async function quickAddTodo(text) {
+  text = text.trim();
+  if (!text) return;
+  const ds = ymd(new Date());
+  const doc = await notes.get(ds);
+  if (!appendTodoLine(doc, text)) return toast(`오늘 탭이 ${MAX_TABS}개로 가득 찼어요`);
   await notes.put(ds, cloneDoc(doc));
   listState.cache.set(ds, doc);
   refreshDigest(ds, doc);
@@ -2212,15 +2218,33 @@ const gtasks = {
     store.set('gtasksListId', this.listId);
     return this.listId;
   },
-  async allTasks() {
+  async allTasks(listId) {
     const out = [];
     let token = '';
     do {
-      const r = await this.api(`/lists/${this.listId}/tasks?showCompleted=true&showHidden=true&maxResults=100${token ? '&pageToken=' + token : ''}`);
-      out.push(...(r.items || []));
+      const r = await this.api(`/lists/${listId}/tasks?showCompleted=true&showHidden=true&maxResults=100${token ? '&pageToken=' + token : ''}`);
+      out.push(...(r.items || []).map((t) => ({ ...t, _list: listId })));
       token = r.nextPageToken || '';
     } while (token);
     return out;
+  },
+  // 음성 비서 등으로 Tasks에 직접 만든 할 일 → 마감일(없으면 오늘) 메모에 '☐ 할 일'로 추가
+  async importTask(task) {
+    const title = (task.title || '').trim().split('\n')[0].slice(0, 200);
+    const ds = task.due ? task.due.slice(0, 10) : ymd(new Date());
+    const open = state.view === 'day' && state.date === ds;
+    const doc = open ? pad.doc : await notes.get(ds);
+    const page = appendTodoLine(doc, title);
+    if (!page) return null;
+    this.setEntry(this.key(ds, { pageId: page.id, text: title }), { id: task.id, done: false, list: task._list });
+    this.applying = true;
+    try {
+      if (open) { saveSoon(); $('#text-page').dataset.pageId = ''; layoutPad(); renderTabs(); }
+      else await notes.put(ds, cloneDoc(doc));
+    } finally { this.applying = false; }
+    listState.cache.set(ds, doc);
+    refreshDigest(ds, doc);
+    return ds;
   },
   run(full) {
     if (!this.running) {
@@ -2237,7 +2261,7 @@ const gtasks = {
     this.mapChanged = false;
     await this.syncMap(false);
     let tasks;
-    try { await this.ensureList(); tasks = await this.allTasks(); }
+    try { await this.ensureList(); tasks = await this.allTasks(this.listId); }
     catch (e) {
       if (!/HTTP 404/.test(e.message)) throw e;
       this.listId = null;
@@ -2247,16 +2271,30 @@ const gtasks = {
       // 목록을 새로 만들었으면 예전 연결표는 무의미
       for (const k of Object.keys(this.map)) this.setEntry(k, null);
     }
+    // 기본 목록('내 할 일 목록')도 함께 읽음 (음성 비서가 주로 여기에 넣음)
+    try { tasks = tasks.concat((await this.allTasks('@default')).filter((t) => !tasks.some((x) => x.id === t.id))); }
+    catch (e) { if (e.silent || e.message === 'AUTH') throw e; console.warn('기본 목록', e.message); }
     this.problem = null;
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const dateOf = (k) => k.slice(3, 13);
+    let changedAny = false;
     // 예전 꼬리표가 붙은 작업은 연결표로 옮기고 메모에서 꼬리표 지우기
     for (const t of tasks) {
       const m = MARKER_RE.exec(t.notes || '');
       if (!m) continue;
       if (!this.entry(m[1])) this.setEntry(m[1], { id: t.id, done: t.status === 'completed' });
       t.notes = (t.notes || '').replace(MARKER_RE, '').trim();
-      await this.api(`/lists/${this.listId}/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify({ notes: t.notes }) });
+      await this.api(`/lists/${t._list}/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify({ notes: t.notes }) });
+    }
+    // Tasks에 직접 만든 새 할 일 가져오기 (가져오기를 켠 뒤 생긴 것, 앱이 만든 것은 제외)
+    let since = store.get('gtasksImportSince', 0);
+    if (!since) { since = Date.now(); store.set('gtasksImportSince', since); }
+    const mapped = new Set(Object.values(this.map).filter((e) => e.id).map((e) => e.id));
+    for (const t of tasks) {
+      if (mapped.has(t.id) || t.status === 'completed' || t.parent || !(t.title || '').trim()) continue;
+      if ((t.notes || '').startsWith('필기캘린더') || Date.parse(t.updated) < since) continue;
+      const ds = await this.importTask(t);
+      if (ds) { dates.add(ds); mapped.add(t.id); changedAny = true; }
     }
     // Tasks 앱에서 체크가 바뀐 날짜 찾기
     for (const [k, e] of Object.entries(this.map)) {
@@ -2269,7 +2307,6 @@ const gtasks = {
       for (const d of allNoteDates()) if (d >= since) dates.add(d);
     }
     const usedIds = new Set(Object.values(this.map).filter((e) => !e.deleted).map((e) => e.id));
-    let changedAny = false;
     for (const ds of dates) {
       // 이 기기가 모르는 날짜는 메모 목록을 막 새로 받은 경우에만 처리 (실수로 Tasks를 지우지 않게)
       if (!notes.has(ds) && Date.now() - notes.lastSync > 5 * 60000) continue;
@@ -2317,12 +2354,12 @@ const gtasks = {
           await this.setStatus(task, t.done); // 앱에서 바뀜 → Tasks에 반영
           next = t.done;
         }
-        if (next !== e.done || e.id !== this.map[k]?.id) this.setEntry(k, { id: task.id, done: next });
+        if (next !== e.done || e.id !== this.map[k]?.id) this.setEntry(k, { id: task.id, done: next, list: task._list });
       }
       // 메모에서 지운 할 일은 Tasks에서도 삭제
       for (const [k, e] of Object.entries(this.map)) {
         if (e.deleted || dateOf(k) !== ds || seen.has(k)) continue;
-        if (byId.has(e.id)) await this.api(`/lists/${this.listId}/tasks/${e.id}`, { method: 'DELETE' }).catch((err) => { if (!/HTTP 404/.test(err.message)) throw err; });
+        if (byId.has(e.id)) await this.api(`/lists/${byId.get(e.id)._list}/tasks/${e.id}`, { method: 'DELETE' }).catch((err) => { if (!/HTTP 404/.test(err.message)) throw err; });
         this.setEntry(k, null);
       }
       if (docChanged) {
@@ -2343,7 +2380,7 @@ const gtasks = {
     if (changedAny && state.view === 'month') renderMonth();
   },
   setStatus(task, done) {
-    return this.api(`/lists/${this.listId}/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(done ? { status: 'completed' } : { status: 'needsAction', completed: null }) });
+    return this.api(`/lists/${task._list || this.listId}/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(done ? { status: 'completed' } : { status: 'needsAction', completed: null }) });
   },
 };
 
