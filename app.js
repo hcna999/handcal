@@ -3306,7 +3306,7 @@ window.argonRefine = {
   },
   async collectTargets(daysBack = 14) {
     if (auth.connected()) {
-      await Promise.all([notes.syncIndex(), digests.sync(), glossary.sync(), gtasks.sync()]).catch((e) => console.warn(e));
+      await Promise.all([notes.syncIndex(), digests.sync(), glossary.sync()]).catch((e) => console.warn(e));
     }
     const minDate = ymd(addDays(new Date(), -daysBack));
     const dates = allNoteDates().filter((d) => d >= minDate);
@@ -3397,7 +3397,7 @@ window.argonRefine = {
     refreshDigest(date, doc);
     if (state.view === 'month') renderMonth();
     if (auth.connected()) {
-      await Promise.all([notes.flush(), digests.sync(), glossary.sync(), gtasks.sync()]).catch((e) => console.warn(e));
+      await Promise.all([notes.flush(), digests.sync(), glossary.sync(), gtasks.run(false)]).catch((e) => console.warn(e));
     }
     return { ok: true, date, pageId, changesCount: (changes || []).length };
   },
