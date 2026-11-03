@@ -9,6 +9,7 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="필기캘린더">
 <script>
@@ -24,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=27">
-<script src="config.js?v=27"></script>
+<link rel="stylesheet" href="style.css?v=28">
+<script src="config.js?v=28"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=27"></script>
-<script src="app.js?v=27" defer></script>
+<script src="vendor/perfect-freehand.js?v=28"></script>
+<script src="app.js?v=28" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -176,6 +177,13 @@
   </section>
 </main>
 
+<div id="install-hint" class="install-hint hidden" role="dialog" aria-label="홈 화면에 추가">
+  <div class="install-text">
+    <strong>전체 화면 앱으로 쓰기</strong>
+    <span>주소창 옆 <b>공유 버튼(□↑)</b> → <b>홈 화면에 추가</b> → 홈 화면의 <b>필기캘린더</b> 아이콘으로 열면 주소창 없이 전체 화면으로 열려요.</span>
+  </div>
+  <button id="install-hint-close" class="pill">닫기</button>
+</div>
 <div id="toast" class="toast hidden"></div>
 </body>
 </html>

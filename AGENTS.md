@@ -1,7 +1,11 @@
 # 필기 캘린더: 개발 안내 (AI·개발자용)
 
-이 문서는 이 저장소를 이어서 개발하는 AI 코딩 도구(Claude Code, Codex, Cursor, Gemini CLI 등)와 사람을 위한 안내다.
-사용자 설치 방법은 `README.md`, 개인정보 안내는 `privacy.md`에 있다.
+이 문서는 이 저장소를 이어서 개발하는 AI 코딩 도구(Claude Code, Codex, Cursor, Gemini CLI, Antigravity 등)와 사람을 위한 안내다.
+사용자 설치 방법은 `README.md`, 개인정보 안내는 `privacy.md`, 진행 중인 계획은 `docs/`에 있다.
+
+> **이 문서는 항상 최신이어야 한다.** 기능·파일 구조·데이터 형식·드라이브 파일·서버 경로·환경 변수·배포 방법을 바꾸면 **같은 커밋에서 이 문서도 고친다.**
+> 계획(`docs/PLAN-*.md`)의 단계를 끝내면 그 문서의 체크 표시와 이 문서를 함께 갱신한다.
+> GitHub Actions `Check`가 코드만 바뀌고 이 문서가 그대로면 경고를 남긴다.
 
 ## 한눈에
 
@@ -23,6 +27,8 @@
 | `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`: 대시보드 변수를 지우지 않음) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
+| `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
+| `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
 
 ## app.js 구역
 
@@ -83,6 +89,7 @@
 ## 배포
 
 - `main`에 푸시하면 앱 화면은 **GitHub Pages가 자동 배포**한다(1~2분).
+- 같은 푸시에서 GitHub Actions `Check`(`.github/workflows/check.yml`)가 `tests/smoke.mjs`를 돌린다. 실패하면 바로 고친다.
 - `worker/` 아래가 바뀌면 **GitHub Actions가 Cloudflare에 자동 배포**한다. 저장소 비밀값 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`가 필요하다.
 - 앱 파일(js/css/html)을 바꾸면 **반드시 두 곳의 버전을 함께 올린다.** 안 올리면 사용자 기기에 예전 파일이 남는다.
   - `sw.js`의 `CACHE = 'handcal-vNN'`
@@ -104,5 +111,6 @@ node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오�
 - 코드 주석과 화면 글은 **한국어**로 쓴다. 사용자는 한국어 사용자다. 기존 코드처럼 짧은 주석으로 "왜"를 적는다.
 - 프레임워크나 빌드 도구를 들이지 않는다. 파일을 그대로 올리면 동작해야 한다.
 - 대상 화면: 아이패드 1180×820(펜), 갤럭시 폴드 펼침 약 884×1028·접힘 약 412×915(터치), 윈도우 마우스. 글자 크기는 화면 크기로 자동 계산된다(`autoFontPx`).
+- 아이패드·아이폰은 설치 안내가 자동으로 뜨지 않으므로, 브라우저로 열면 '홈 화면에 추가' 안내를 한 번 보여준다(`showInstallHint`). 홈 화면에서 열면 `manifest.webmanifest`의 `display: standalone`으로 전체 화면이 된다.
 - 손가락은 기본으로 화면 이동, 필기는 펜으로만 한다. iPad Safari는 이미 보낸 펜 이동 이벤트를 다시 보낼 때가 있다(`lastTime`으로 거름).
 - 드라이브·Tasks에서 무언가를 **지우는 코드는 보수적으로** 작성한다. 정보가 불확실하면 지우지 않는다(`gtasks._run`의 안전장치 참고).

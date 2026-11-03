@@ -1,0 +1,32 @@
+# main에 올릴 때마다: 기본 동작 확인(tests/smoke.mjs) + 코드만 바뀌고 개발 안내(AGENTS.md)가 그대로면 경고
+name: Check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 브라우저 준비
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: 기본 동작 확인
+        run: node tests/smoke.mjs
+      - name: 개발 안내 최신화 확인
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          changed=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(app\.js|index\.html|style\.css|worker/worker\.js|sw\.js)$' && ! echo "$changed" | grep -qx 'AGENTS.md'; then
+            echo "::warning title=AGENTS.md 확인::앱·서버 코드가 바뀌었는데 AGENTS.md는 그대로예요. 구조·데이터 형식·설정이 바뀌었다면 AGENTS.md도 고쳐 주세요."
+          fi

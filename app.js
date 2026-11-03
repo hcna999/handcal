@@ -2726,6 +2726,18 @@ function bindPad() {
   window.addEventListener('pagehide', () => { saveNow(); });
 }
 
+// 아이패드·아이폰은 설치 안내가 자동으로 뜨지 않아서, 브라우저로 열었을 때 한 번 안내
+function showInstallHint() {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || isIPad();
+  const installed = navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+  if (!ios || installed || store.get('installHintClosed', false)) return;
+  $('#install-hint').classList.remove('hidden');
+  $('#install-hint-close').onclick = () => {
+    $('#install-hint').classList.add('hidden');
+    store.set('installHintClosed', true);
+  };
+}
+
 async function init() {
   auth.init();
   bind();
@@ -2737,6 +2749,7 @@ async function init() {
   history.replaceState(null, '', location.pathname);
   renderMonth();
   if (openToday) openDay(ymd(new Date()));
+  showInstallHint();
   if (auth.connected()) { watchExpiry(); afterSignIn(); }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
