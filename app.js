@@ -278,6 +278,7 @@ const normPage = (p, id) => ({
   height: Math.max(PAGE_H, Number(p?.height) || PAGE_H),
   strokes: Array.isArray(p?.strokes) ? p.strokes : [],
   ...(p?.ocr ? { ocr: p.ocr } : {}),
+  ...(p?.paper ? { paper: p.paper } : {}),
   ...(p?.kind === 'text' ? { kind: 'text', text: String(p.text || '') } : {}),
   ...(p?.kind === 'photo' || p?.kind === 'voice' ? { kind: p.kind, text: String(p.text || ''), media: Array.isArray(p.media) ? p.media : [] } : {}),
 });
@@ -1481,8 +1482,9 @@ function layoutPad() {
   ta.dataset.pageId = '';
   const wrap = $('#page-scroll');
   if (!wrap.clientWidth) return;
-  const cssW = Math.max(280, Math.min(wrap.clientWidth - 24, 1100));
+  const cssW = Math.round(Math.max(280, Math.min(wrap.clientWidth - 24, 1100)) * (pad.zoom || 1));
   pad.scale = cssW / PAGE_W;
+  $('#paper-select').value = pad.note.paper || 'lined';
   const cssH = Math.round(pad.note.height * pad.scale);
   pad.dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), Math.sqrt(16e6 / (cssW * cssH)));
   for (const c of [pad.canvas, pad.overlay]) {
@@ -1513,11 +1515,7 @@ const inkColor = (c) => (darkInk && DARK_INK[c]) || c;
 
 function drawPaper(ctx) {
   ctx.save();
-  ctx.strokeStyle = cssVar('--paper-line');
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let y = 70; y < pad.note.height; y += 50) { ctx.moveTo(40, y); ctx.lineTo(PAGE_W - 40, y); }
-  ctx.stroke();
+  drawPaperKind(ctx);
   ctx.strokeStyle = cssVar('--page-break');
   ctx.setLineDash([10, 10]);
   ctx.beginPath();
@@ -1567,7 +1565,7 @@ function drawStroke(ctx, s, live = false) {
 }
 
 // 펜 획을 매끄러운 외곽선(Path2D)으로 변환. 완성된 획은 캐시
-const pathCache = new WeakMap();
+let pathCache = new WeakMap(); // 압력 설정을 바꾸면 새로 만듦
 function penPath(s, live) {
   if (!live && pathCache.has(s)) return pathCache.get(s);
   const pts = inkPoints(s);
@@ -1620,14 +1618,15 @@ function inkPoints(s) {
       }
     }
   }
-  return p.map((q, i) => [q[0], q[1], Math.min(1, 0.25 + pr[i] * 1.6)]);
+  const [base, mult] = pressureCurve();
+  return p.map((q, i) => [q[0], q[1], Math.min(1, base + pr[i] * mult)]);
 }
 
-function redraw() {
+function redraw(skip) {
   darkInk = cssVar('--is-dark') === '1';
   setTransform(pad.ctx);
   drawPaper(pad.ctx);
-  for (const s of pad.note.strokes) drawStroke(pad.ctx, s);
+  for (const s of pad.note.strokes) if (!skip?.has(s)) drawStroke(pad.ctx, s);
   renderOverlay();
 }
 
@@ -1635,6 +1634,7 @@ function renderOverlay() {
   pad.rafPending = false;
   setTransform(pad.octx);
   if (pad.active?.stroke) drawStroke(pad.octx, pad.active.stroke, true);
+  if (lasso.path || lasso.sel.size) lassoOverlay(pad.octx);
   const h = pad.hover;
   if (h && (pad.tool === 'eraser' || pad.active?.erase)) {
     pad.octx.beginPath();
@@ -1714,11 +1714,218 @@ function updateUndoUI() {
   $('#redo').disabled = !pad.redo.length;
 }
 
+// ---------- 확대·축소: 두 손가락 벌리기, Ctrl+휠, 도구 줄 [−][100%][+]
+function setZoom(z, focus) {
+  z = Math.max(0.5, Math.min(3, Math.round(z * 100) / 100));
+  if (z === pad.zoom) return;
+  const sc = $('#page-scroll');
+  const r = sc.getBoundingClientRect();
+  const fx = focus ? focus.x - r.left : sc.clientWidth / 2, fy = focus ? focus.y - r.top : sc.clientHeight / 2;
+  // 손가락 사이(또는 화면 가운데)에 있던 자리가 그대로 보이게
+  const rx = (sc.scrollLeft + fx) / Math.max(1, sc.scrollWidth), ry = (sc.scrollTop + fy) / Math.max(1, sc.scrollHeight);
+  pad.zoom = z;
+  layoutPad();
+  sc.scrollLeft = rx * sc.scrollWidth - fx;
+  sc.scrollTop = ry * sc.scrollHeight - fy;
+  $('#zoom-label').textContent = Math.round(z * 100) + '%';
+}
+
+const pinch = { pts: new Map(), start: null, raf: 0 };
+function pinchDown(e) {
+  pinch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch.pts.size === 2) {
+    const [a, b] = [...pinch.pts.values()];
+    pinch.start = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: pad.zoom };
+    // 두 번째 손가락이 닿으면 그리던·밀던 것은 취소하고 확대로
+    if (pad.active?.pointerType === 'touch') { pad.active = null; requestOverlay(); }
+    pad.scroll = null;
+    return true;
+  }
+  return false;
+}
+function pinchMove(e) {
+  if (!pinch.pts.has(e.pointerId)) return false;
+  pinch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch.start || pinch.pts.size < 2) return false;
+  const [a, b] = [...pinch.pts.values()];
+  const z = pinch.start.z * (Math.hypot(a.x - b.x, a.y - b.y) / pinch.start.d);
+  cancelAnimationFrame(pinch.raf);
+  pinch.raf = requestAnimationFrame(() => setZoom(z, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }));
+  return true;
+}
+function pinchUp(e) {
+  const was = pinch.start;
+  pinch.pts.delete(e.pointerId);
+  if (pinch.pts.size < 2) pinch.start = null;
+  return !!was;
+}
+
+// ---------- 종이 배경 (탭마다): 줄 / 모눈 / 점 / 무지
+function drawPaperKind(ctx) {
+  const kind = pad.note.paper || 'lined';
+  const h = pad.note.height;
+  ctx.strokeStyle = ctx.fillStyle = cssVar('--paper-line');
+  ctx.lineWidth = 1;
+  if (kind === 'lined') {
+    ctx.beginPath();
+    for (let y = 70; y < h; y += 50) { ctx.moveTo(40, y); ctx.lineTo(PAGE_W - 40, y); }
+    ctx.stroke();
+  } else if (kind === 'grid') {
+    ctx.beginPath();
+    for (let y = 40; y < h; y += 40) { ctx.moveTo(0, y); ctx.lineTo(PAGE_W, y); }
+    for (let x = 40; x < PAGE_W; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+    ctx.stroke();
+  } else if (kind === 'dot') {
+    for (let y = 40; y < h; y += 40) for (let x = 40; x < PAGE_W; x += 40) { ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI * 2); ctx.fill(); }
+  }
+}
+
+// ---------- 펜 압력 감도 (설정): 가볍게 쓰는 사람은 굵게 보정
+const PRESSURE = { light: [0.32, 2.2], normal: [0.25, 1.6], heavy: [0.15, 1.1] };
+function pressureCurve() { return PRESSURE[store.get('pressure', 'normal')] || PRESSURE.normal; }
+
+// ---------- 올가미: 둘러싸서 옮기기·색 바꾸기·지우기
+const lasso = {
+  sel: new Set(),
+  path: null,
+  drag: null,
+  active: null,
+  bbox() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const s of this.sel) for (const p of s.points) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+    const m = 12;
+    return { x0: x0 - m, y0: y0 - m, x1: x1 + m, y1: y1 + m };
+  },
+  clear() {
+    this.sel.clear();
+    this.path = null;
+    this.drag = null;
+    $('#sel-bar').classList.add('hidden');
+    if (pad.ctx) { redraw(); requestOverlay(); }
+  },
+  showBar() {
+    $('#sel-bar').classList.toggle('hidden', !this.sel.size);
+    $('#sel-count').textContent = `${this.sel.size}개 선택`;
+  },
+};
+function inPolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function lassoDown(e) {
+  const [x, y] = toPage(e);
+  lasso.active = { id: e.pointerId };
+  if (lasso.sel.size) {
+    const b = lasso.bbox();
+    if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) {
+      // 선택한 것 옮기기 시작: 원래 자리에서는 잠시 지우고 덮개 화면에 따라 그림
+      lasso.drag = { x, y, dx: 0, dy: 0 };
+      redraw(lasso.sel);
+      requestOverlay();
+      return;
+    }
+  }
+  lasso.sel.clear();
+  lasso.showBar();
+  redraw();
+  lasso.path = [[x, y]];
+  requestOverlay();
+}
+function lassoMove(e) {
+  const [x, y] = toPage(e);
+  if (lasso.drag) { lasso.drag.dx = x - lasso.drag.x; lasso.drag.dy = y - lasso.drag.y; }
+  else if (lasso.path) lasso.path.push([x, y]);
+  requestOverlay();
+}
+function lassoUp() {
+  lasso.active = null;
+  if (lasso.drag) {
+    const { dx, dy } = lasso.drag;
+    lasso.drag = null;
+    if (Math.hypot(dx, dy) > 1) {
+      pushUndo();
+      const moved = new Set();
+      pad.note.strokes = pad.note.strokes.map((s) => {
+        if (!lasso.sel.has(s)) return s;
+        const t = { ...s, points: s.points.map((p) => [Math.round((p[0] + dx) * 10) / 10, Math.round((p[1] + dy) * 10) / 10, p[2]]) };
+        moved.add(t);
+        return t;
+      });
+      lasso.sel = moved;
+      saveSoon();
+    }
+    redraw();
+    requestOverlay();
+    return;
+  }
+  const poly = lasso.path || [];
+  lasso.path = null;
+  if (poly.length > 4) {
+    for (const s of pad.note.strokes) {
+      const inside = s.points.filter((p) => inPolygon(p[0], p[1], poly)).length;
+      if (inside / s.points.length >= 0.5) lasso.sel.add(s);
+    }
+  }
+  lasso.showBar();
+  requestOverlay();
+}
+function lassoOverlay(ctx) {
+  ctx.save();
+  ctx.lineWidth = 1.5 / pad.scale;
+  ctx.setLineDash([6 / pad.scale, 4 / pad.scale]);
+  ctx.strokeStyle = cssVar('--accent');
+  if (lasso.path) {
+    ctx.beginPath();
+    lasso.path.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.stroke();
+  }
+  if (lasso.sel.size) {
+    const dx = lasso.drag?.dx || 0, dy = lasso.drag?.dy || 0;
+    if (lasso.drag) {
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.setLineDash([]);
+      for (const s of lasso.sel) drawStroke(ctx, s);
+      ctx.restore();
+    }
+    const b = lasso.bbox();
+    ctx.strokeRect(b.x0 + dx, b.y0 + dy, b.x1 - b.x0, b.y1 - b.y0);
+  }
+  ctx.restore();
+}
+function recolorSelection(color) {
+  if (!lasso.sel.size) return;
+  pushUndo();
+  const next = new Set();
+  pad.note.strokes = pad.note.strokes.map((s) => {
+    if (!lasso.sel.has(s)) return s;
+    const t = { ...s, color };
+    next.add(t);
+    return t;
+  });
+  lasso.sel = next;
+  redraw();
+  requestOverlay();
+  saveSoon();
+}
+function deleteSelection() {
+  if (!lasso.sel.size) return;
+  pushUndo();
+  pad.note.strokes = pad.note.strokes.filter((s) => !lasso.sel.has(s));
+  lasso.clear();
+  saveSoon();
+}
+
 function capture(id) {
   try { pad.canvas.setPointerCapture(id); } catch { /* 이미 떨어진 포인터 */ }
 }
 
 function onPointerDown(e) {
+  if (e.pointerType === 'touch' && pinchDown(e)) return;
   if (e.pointerType === 'pen') {
     // 손바닥이 먼저 닿아 그려지던 획은 취소
     if (pad.active?.pointerType === 'touch') { pad.active = null; requestOverlay(); }
@@ -1742,6 +1949,7 @@ function onPointerDown(e) {
   if (e.pointerType === 'touch' && Math.max(e.width || 0, e.height || 0) > 40) return;
   e.preventDefault();
   capture(e.pointerId);
+  if (pad.tool === 'lasso' && !eraserButton) { lassoDown(e); return; }
   const pt = makePoint(e);
   pad.hover = pt;
   if (pad.tool === 'eraser' || eraserButton) {
@@ -1758,6 +1966,8 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  if (e.pointerType === 'touch' && pinchMove(e)) return;
+  if (lasso.active && e.pointerId === lasso.active.id) { lassoMove(e); return; }
   if (pad.scroll && e.pointerId === pad.scroll.id) {
     const sc = $('#page-scroll');
     sc.scrollTop -= e.clientY - pad.scroll.y;
@@ -1792,6 +2002,8 @@ function onPointerMove(e) {
 }
 
 function onPointerUp(e) {
+  if (e.pointerType === 'touch' && pinchUp(e)) { pad.scroll = null; return; }
+  if (lasso.active && e.pointerId === lasso.active.id) { lassoUp(e); return; }
   if (pad.scroll && e.pointerId === pad.scroll.id) { pad.scroll = null; return; }
   if (!pad.active || e.pointerId !== pad.active.id) return;
   const a = pad.active;
@@ -1872,7 +2084,8 @@ function syncToolbar() {
   document.querySelectorAll('.tool').forEach((b) => b.classList.toggle('active', b.dataset.tool === pad.tool));
   const color = pad.colors[pad.tool];
   document.querySelectorAll('.swatch').forEach((b) => b.classList.toggle('active', b.dataset.color === color));
-  $('#colors').classList.toggle('disabled', pad.tool === 'eraser');
+  $('#colors').classList.toggle('disabled', pad.tool === 'eraser' || pad.tool === 'lasso');
+  $('#sizes').classList.toggle('disabled', pad.tool === 'lasso');
   document.querySelectorAll('.size').forEach((b) => b.classList.toggle('active', Number(b.dataset.size) === pad.sizeIdx));
   if (pad.tool !== 'eraser') pad.hover = null;
   if (pad.ctx) requestOverlay();
@@ -2020,6 +2233,8 @@ function renderTabs() {
 
 function switchPage(i) {
   if (i === pad.pageIdx || pad.active) return;
+  lasso.sel.clear();
+  $('#sel-bar').classList.add('hidden');
   pad.pageIdx = i;
   pad.undo = [];
   pad.redo = [];
@@ -3502,6 +3717,7 @@ const settings = {
     $('#font-up').disabled = this.scale >= UI_SCALES[UI_SCALES.length - 1];
     document.querySelectorAll('#theme-seg button').forEach((b) => b.classList.toggle('active', b.dataset.theme === this.theme));
     document.querySelectorAll('#lunar-seg button').forEach((b) => b.classList.toggle('active', b.dataset.lunar === store.get('lunar', 'key')));
+    document.querySelectorAll('#pressure-seg button').forEach((b) => b.classList.toggle('active', b.dataset.pressure === store.get('pressure', 'normal')));
     document.querySelector('meta[name=theme-color]')?.setAttribute('content', cssVar('--card') || '#ffffff');
     relayout();
   },
@@ -3672,7 +3888,38 @@ function bindPad() {
   pad.canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
 
   buildToolbar();
-  document.querySelectorAll('.tool').forEach((b) => { b.onclick = () => { pad.tool = b.dataset.tool; syncToolbar(); }; });
+  document.querySelectorAll('.tool').forEach((b) => { b.onclick = () => { pad.tool = b.dataset.tool; if (pad.tool !== 'lasso') lasso.clear(); syncToolbar(); }; });
+  // 확대·축소
+  pad.zoom = 1;
+  $('#zoom-in').onclick = () => setZoom(pad.zoom + 0.25);
+  $('#zoom-out').onclick = () => setZoom(pad.zoom - 0.25);
+  $('#zoom-label').onclick = () => setZoom(1);
+  $('#page-scroll').addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || pad.note.kind) return;
+    e.preventDefault();
+    setZoom(pad.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), { x: e.clientX, y: e.clientY });
+  }, { passive: false });
+  // 종이 배경
+  $('#paper-select').onchange = (e) => { pad.note.paper = e.target.value === 'lined' ? undefined : e.target.value; if (!pad.note.paper) delete pad.note.paper; redraw(); saveSoon(); };
+  // 올가미 선택 막대
+  $('#sel-colors').replaceChildren(...COLORS.map((c) => {
+    const b = el('button', 'swatch');
+    b.style.background = c;
+    b.setAttribute('aria-label', '선택한 글씨 색 ' + c);
+    b.onclick = () => recolorSelection(c);
+    return b;
+  }));
+  $('#sel-delete').onclick = deleteSelection;
+  $('#sel-done').onclick = () => lasso.clear();
+  // 펜 압력 감도
+  $('#pressure-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    store.set('pressure', b.dataset.pressure);
+    pathCache = new WeakMap();
+    settings.apply();
+    if (state.view === 'day' && !pad.note.kind) redraw();
+  });
   $('#colors').onclick = (e) => {
     const b = e.target.closest('.swatch');
     if (!b || pad.tool === 'eraser') return;

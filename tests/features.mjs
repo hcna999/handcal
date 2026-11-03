@@ -100,6 +100,28 @@ try {
   check('마크다운 내보내기', md.includes('- [ ] 내일까지 견적서') && md.includes('주간회의'));
   await p.click('#modal-close');
 
+  // 손글씨: 올가미로 골라 옮기기·확대해도 좌표 정확
+  await p.evaluate(() => addPage('ink'));
+  await p.waitForTimeout(200);
+  const B = await p.$eval('#canvas', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, s: r.width / 1000 }; });
+  const at = (x, y) => [B.x + x * B.s, B.y + y * B.s];
+  await p.mouse.move(...at(100, 200)); await p.mouse.down(); await p.mouse.move(...at(300, 200), { steps: 6 }); await p.mouse.up();
+  await p.click('[data-tool=lasso]');
+  await p.mouse.move(...at(60, 150)); await p.mouse.down();
+  for (const pt of [[350, 150], [350, 260], [60, 260], [60, 150]]) await p.mouse.move(...at(...pt), { steps: 4 });
+  await p.mouse.up();
+  await p.mouse.move(...at(200, 200)); await p.mouse.down(); await p.mouse.move(...at(250, 300), { steps: 5 }); await p.mouse.up();
+  const moved = await p.evaluate(() => pad.note.strokes[0].points[0].slice(0, 2).map(Math.round));
+  check('올가미로 옮기기', moved[0] === 150 && moved[1] === 300, moved.join(','));
+  await p.click('#sel-done');
+  await p.click('#zoom-in');
+  await p.click('#zoom-in');
+  await p.click('[data-tool=pen]');
+  const B2 = await p.$eval('#canvas', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, s: r.width / 1000 }; });
+  await p.mouse.move(B2.x + 100 * B2.s, B2.y + 600 * B2.s); await p.mouse.down(); await p.mouse.move(B2.x + 200 * B2.s, B2.y + 600 * B2.s, { steps: 4 }); await p.mouse.up();
+  check('150% 확대에서도 좌표 정확', JSON.stringify(await p.evaluate(() => pad.note.strokes.at(-1).points[0].slice(0, 2).map(Math.round))) === '[100,600]');
+  await p.click('#zoom-label');
+
   // 사진 탭: 넣으면 줄여서 저장, 달력 요약에 사진 설명
   await p.evaluate(() => addPage('photo'));
   await p.setInputFiles('.media-pick input', { name: 'a.png', mimeType: 'image/png', buffer: png(64, 48) });

@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=30">
-<script src="config.js?v=30"></script>
+<link rel="stylesheet" href="style.css?v=31">
+<script src="config.js?v=31"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=30"></script>
-<script src="app.js?v=30" defer></script>
+<script src="vendor/perfect-freehand.js?v=31"></script>
+<script src="app.js?v=31" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -108,8 +108,8 @@
             <button data-lunar="key">1일·15일</button>
             <button data-lunar="all">매일</button>
           </div>
-          <span class="settings-label" data-soon>펜 압력 (가볍게 쓰면 굵게 보정)</span>
-          <div class="seg" id="pressure-seg" data-soon>
+          <span class="settings-label">펜 압력 (가볍게 쓰면 굵게 보정)</span>
+          <div class="seg" id="pressure-seg">
             <button data-pressure="light">가볍게</button>
             <button data-pressure="normal">보통</button>
             <button data-pressure="heavy">세게</button>
@@ -175,7 +175,7 @@
         <button class="tool active" data-tool="pen">펜</button>
         <button class="tool" data-tool="hl">형광펜</button>
         <button class="tool" data-tool="eraser">지우개</button>
-        <button class="tool" data-soon data-tool="lasso" aria-label="올가미 선택" title="올가미: 둘러싸서 옮기기·색 바꾸기·지우기"><svg class="ic"><use href="#i-lasso"/></svg></button>
+        <button class="tool" data-tool="lasso" aria-label="올가미 선택" title="올가미: 둘러싸서 옮기기·색 바꾸기·지우기"><svg class="ic"><use href="#i-lasso"/></svg></button>
       </div>
       <div class="group" id="colors"></div>
       <div class="group" id="sizes"></div>
@@ -183,13 +183,13 @@
         <button id="undo" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
         <button id="redo" title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
       </div>
-      <div class="group zoom-group" data-soon>
+      <div class="group zoom-group">
         <button id="zoom-out" aria-label="축소">−</button>
         <button id="zoom-label" class="zoom-label" title="눌러서 100%로">100%</button>
         <button id="zoom-in" aria-label="확대">+</button>
       </div>
       <div class="group">
-        <select id="paper-select" data-soon aria-label="종이 배경">
+        <select id="paper-select" aria-label="종이 배경">
           <option value="lined">줄</option>
           <option value="grid">모눈</option>
           <option value="dot">점</option>
