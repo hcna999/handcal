@@ -2701,15 +2701,13 @@ function cancelEditEvent() {
 }
 
 // 하루 화면 왼쪽 패널: 이 날짜의 할 일 목록 + 키보드 할 일 추가 + 손글씨(OCR) 할 일 추가
-function updatePanelToggleLabel(evCount) {
+function updatePanelToggleLabel() {
   const btn = $('#panel-toggle');
   if (!btn) return;
   const todos = state.date && pad.doc ? todosOf(pad.doc, state.date) : [];
   const left = todos.filter((t) => !t.done).length;
-  const cachedEv = evCount ?? (state.date ? events.on(events.cached(parseYmd(state.date), addDays(parseYmd(state.date), 1)) || [], parseYmd(state.date)).length : 0);
   if (left > 0) btn.textContent = `할 일 ${left}`;
   else if (todos.length > 0) btn.textContent = `할 일 ✓`;
-  else if (cachedEv > 0) btn.textContent = `할 일 · 일정 ${cachedEv}`;
   else btn.textContent = '할 일';
 }
 
@@ -2792,6 +2790,13 @@ const todoInk = {
     const ctx = c.getContext('2d');
     const pt = (e) => {
       const r = c.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.max(300, Math.round(r.width * dpr));
+      const h = Math.max(200, Math.round(r.height * dpr));
+      if (Math.abs(c.width - w) > 4 || Math.abs(c.height - h) > 4) {
+        c.width = w;
+        c.height = h;
+      }
       return [(e.clientX - r.left) * (c.width / (r.width || 1)), (e.clientY - r.top) * (c.height / (r.height || 1)), e.pressure || 0.5];
     };
     const redrawMini = () => {
@@ -4753,7 +4758,7 @@ function dayActions(ds) {
       { label: '사진 메모', icon: 'photo', fn: () => openDay(ds).then(() => addPage('photo')) },
       { label: '음성 메모', icon: 'mic', fn: () => openDay(ds).then(() => addPage('voice')) },
     ] : []),
-    { label: '메모 일정 추가', icon: 'calendar', fn: () => openDay(ds).then(() => { setPanel(true); $('#ev-title').focus(); }) },
+    { label: '할 일 패널 열기', icon: 'check', fn: () => openDay(ds).then(() => { setPanel(true); $('#day-todo-input').focus(); }) },
   ];
 }
 

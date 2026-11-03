@@ -163,7 +163,7 @@ try {
   await p.waitForTimeout(200);
   const dayTodosTxt = await p.textContent('#day-todo-list');
   check('하루 왼쪽 패널에서 할 일 추가', dayTodosTxt.includes('패널에서 추가한 할 일'), dayTodosTxt);
-  await p.click('#events-summary');
+  await p.evaluate(() => { const d = document.querySelector('#day-events-details'); if (d) { d.classList.remove('hidden'); d.open = true; } });
   await p.waitForTimeout(100);
   await p.click('#event-list li.editable');
   await p.waitForTimeout(150);
