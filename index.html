@@ -25,24 +25,45 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=28">
-<script src="config.js?v=28"></script>
+<link rel="stylesheet" href="style.css?v=29">
+<script src="config.js?v=29"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=28"></script>
-<script src="app.js?v=28" defer></script>
+<script src="vendor/perfect-freehand.js?v=29"></script>
+<script src="app.js?v=29" defer></script>
 </head>
 <body>
+<!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h.01M18 13.5h.01M9 14h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zm10.5-14.5 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-photo" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="m4 17 5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></symbol>
+    <symbol id="i-lasso" viewBox="0 0 24 24"><path d="M5 9c0-3 3.5-5 7.5-5S20 6 20 9s-3.5 5-7.5 5c-2 0-3.5-.4-4.5-1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2" stroke-linecap="round"/><path d="M8 13c-1.5 1-2 2.5-1 4s3 1 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 5v15M15 5v15" stroke="currentColor" stroke-width="1.6"/></symbol>
+  </defs>
+</svg>
+
+<div id="offline-bar" class="offline-bar hidden" role="status">오프라인 · 이 기기에 저장 중이에요. 연결되면 자동으로 올려요.</div>
+
 <header class="topbar">
   <div id="month-nav" class="nav">
-    <button id="prev-month" class="arrow" aria-label="이전 달">‹</button>
+    <button id="prev-month" class="arrow" aria-label="이전">‹</button>
     <h1 id="month-title"></h1>
-    <button id="next-month" class="arrow" aria-label="다음 달">›</button>
+    <button id="next-month" class="arrow" aria-label="다음">›</button>
     <button id="today-btn" class="pill">오늘</button>
     <div id="view-seg" class="seg view-seg" role="tablist" aria-label="보기">
-      <button data-view="month">월</button>
-      <button data-view="week">주</button>
-      <button data-view="list">메모</button>
-      <button data-view="todo">할 일</button>
+      <button data-view="month" role="tab">월</button>
+      <button data-view="week" role="tab">주</button>
+      <button data-view="list" role="tab">메모</button>
+      <button data-view="todo" role="tab">할 일</button>
     </div>
   </div>
   <div id="day-nav" class="nav hidden">
@@ -50,15 +71,24 @@
     <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
     <h1 id="day-title"></h1>
     <button id="next-day" class="arrow" aria-label="다음 날">›</button>
-    <button id="panel-toggle" class="pill" aria-expanded="false">일정·요약</button>
+    <button id="panel-toggle" class="pill" aria-expanded="false">일정</button>
   </div>
   <div class="right">
-    <span id="sync-status" class="status"></span>
-    <button id="auth-btn" class="pill primary">구글 로그인</button>
+    <button id="search-btn" data-soon class="icon-btn" aria-label="검색" title="검색"><svg class="ic"><use href="#i-search"/></svg></button>
+    <button id="day-menu-btn" data-soon class="icon-btn hidden" aria-label="더 보기" title="내보내기 등"><svg class="ic"><use href="#i-more"/></svg></button>
     <div class="settings-wrap">
-      <button id="settings-btn" class="pill" aria-label="설정" aria-expanded="false">⚙</button>
+      <button id="settings-btn" class="icon-btn" aria-label="설정" aria-expanded="false" title="설정"><svg class="ic"><use href="#i-gear"/></svg><span id="sync-dot" class="sync-dot" aria-hidden="true"></span></button>
       <div id="settings" class="settings hidden" role="dialog" aria-label="설정">
-        <div class="settings-row">
+        <section class="settings-sec">
+          <h3>계정 · 동기화</h3>
+          <span id="sync-status" class="settings-label"></span>
+          <div class="settings-btns">
+            <button id="auth-btn" class="pill primary">구글 로그인</button>
+            <button id="sync-now" class="pill">지금 동기화</button>
+          </div>
+        </section>
+        <section class="settings-sec">
+          <h3>화면</h3>
           <span class="settings-label">글자 크기 (화면에 맞춰 자동 · 필요하면 보정)</span>
           <span id="screen-info" class="settings-label"></span>
           <div class="seg">
@@ -66,16 +96,27 @@
             <button id="font-size-label" tabindex="-1">100%</button>
             <button id="font-up" aria-label="글자 크게">가+</button>
           </div>
-        </div>
-        <div class="settings-row">
           <span class="settings-label">화면 모드</span>
           <div class="seg" id="theme-seg">
             <button data-theme="auto">자동</button>
             <button data-theme="light">라이트</button>
             <button data-theme="dark">다크</button>
           </div>
-        </div>
-        <div class="settings-row">
+          <span class="settings-label" data-soon>음력 표시</span>
+          <div class="seg" id="lunar-seg" data-soon>
+            <button data-lunar="off">끔</button>
+            <button data-lunar="key">1일·15일</button>
+            <button data-lunar="all">매일</button>
+          </div>
+          <span class="settings-label" data-soon>펜 압력 (가볍게 쓰면 굵게 보정)</span>
+          <div class="seg" id="pressure-seg" data-soon>
+            <button data-pressure="light">가볍게</button>
+            <button data-pressure="normal">보통</button>
+            <button data-pressure="heavy">세게</button>
+          </div>
+        </section>
+        <section class="settings-sec">
+          <h3>연동</h3>
           <span class="settings-label">구글 Tasks 할 일 연동</span>
           <div class="seg" id="gtasks-seg">
             <button data-on="1">켜기</button>
@@ -83,7 +124,18 @@
           </div>
           <span id="gtasks-status" class="settings-label"></span>
           <button id="gtasks-reauth" class="pill primary hidden">구글 다시 연결</button>
-        </div>
+          <span id="link-status" class="settings-label"></span>
+        </section>
+        <section class="settings-sec">
+          <h3>데이터 · 기타</h3>
+          <div class="settings-btns">
+            <button id="open-export" data-soon class="pill">내보내기</button>
+            <button id="open-trash" class="pill">휴지통</button>
+            <button id="open-templates" class="pill">메모 서식</button>
+            <button id="open-lock" data-soon class="pill">앱 잠금</button>
+            <button id="open-onboard" class="pill">사용법 보기</button>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -106,17 +158,20 @@
         <strong id="todo-count"></strong>
         <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료한 것도 보기</label>
       </div>
-      <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터)" aria-label="오늘 할 일 추가" enterkeyhint="done">
+      <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터) · '금요일까지 보고서'처럼 쓰면 기한 인식" aria-label="오늘 할 일 추가" enterkeyhint="done">
       <div id="todo-items"></div>
     </div>
+    <button id="fab" class="fab" aria-label="오늘 메모 쓰기 (길게 누르면 종류 선택)" title="오늘 메모 쓰기"><svg class="ic"><use href="#i-plus"/></svg></button>
   </section>
 
   <section id="day-view" class="hidden">
+    <div id="page-tabs" class="page-tabs" role="tablist" aria-label="메모 탭"></div>
     <div class="toolbar">
       <div class="group">
         <button class="tool active" data-tool="pen">펜</button>
         <button class="tool" data-tool="hl">형광펜</button>
         <button class="tool" data-tool="eraser">지우개</button>
+        <button class="tool" data-soon data-tool="lasso" aria-label="올가미 선택" title="올가미: 둘러싸서 옮기기·색 바꾸기·지우기"><svg class="ic"><use href="#i-lasso"/></svg></button>
       </div>
       <div class="group" id="colors"></div>
       <div class="group" id="sizes"></div>
@@ -124,10 +179,27 @@
         <button id="undo" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
         <button id="redo" title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
       </div>
-      <div class="group">
-        <button id="finger-mode" class="pill"></button>
-        <button id="clear" class="pill danger">전체 지우기</button>
+      <div class="group zoom-group" data-soon>
+        <button id="zoom-out" aria-label="축소">−</button>
+        <button id="zoom-label" class="zoom-label" title="눌러서 100%로">100%</button>
+        <button id="zoom-in" aria-label="확대">+</button>
       </div>
+      <div class="group">
+        <select id="paper-select" data-soon aria-label="종이 배경">
+          <option value="lined">줄</option>
+          <option value="grid">모눈</option>
+          <option value="dot">점</option>
+          <option value="blank">무지</option>
+        </select>
+        <button id="finger-mode" class="pill"></button>
+        <button id="clear" class="pill danger">이 탭 지우기</button>
+      </div>
+    </div>
+    <div id="sel-bar" class="sel-bar hidden">
+      <span id="sel-count"></span>
+      <div class="group" id="sel-colors"></div>
+      <button id="sel-delete" class="pill danger">지우기</button>
+      <button id="sel-done" class="pill">선택 끝</button>
     </div>
     <div class="day-body">
       <aside class="events-panel" id="side-panel">
@@ -149,21 +221,25 @@
           </div>
         </form>
       </section>
-      <section id="ocr-panel" class="panel-sec">
-        <h2>필기 → 글자 (AI)</h2>
-        <div class="ocr-actions">
-          <button id="ocr-btn" class="pill primary">글자로 변환</button>
-          <button id="ocr-copy" class="pill hidden">복사</button>
-        </div>
-        <p id="ocr-hint" class="muted-text">손글씨를 글자로 옮기고 요약·할 일을 정리해요.</p>
-        <div id="ocr-result" class="hidden">
-          <label class="ocr-label" for="ocr-text">원문 (직접 고칠 수 있어요)</label>
-          <textarea id="ocr-text" rows="8"></textarea>
-        </div>
-      </section>
       </aside>
       <div id="page-scroll" class="page-scroll">
-        <div id="page-tabs" class="page-tabs" role="tablist" aria-label="필기 탭"></div>
+        <section id="ocr-panel" class="ocr-card hidden">
+          <button id="ocr-head" class="ocr-head" aria-expanded="false">
+            <span id="ocr-line" class="ocr-line"></span>
+            <span id="ocr-more" class="ocr-more">자세히</span>
+          </button>
+          <div id="ocr-body" class="ocr-body hidden">
+            <div class="ocr-actions">
+              <button id="ocr-btn" class="pill primary">글자로 변환</button>
+              <button id="ocr-copy" class="pill hidden">복사</button>
+            </div>
+            <p id="ocr-hint" class="muted-text">손글씨를 글자로 옮기고 요약·할 일을 정리해요.</p>
+            <div id="ocr-result" class="hidden">
+              <label class="ocr-label" for="ocr-text">원문 (직접 고칠 수 있어요)</label>
+              <textarea id="ocr-text" rows="8"></textarea>
+            </div>
+          </div>
+        </section>
         <div class="page-wrap">
           <canvas id="canvas"></canvas>
           <canvas id="overlay"></canvas>
@@ -172,10 +248,66 @@
         <button id="add-page" class="pill">+ 종이 아래로 늘리기</button>
         <div id="text-todos" class="text-todos hidden"></div>
         <textarea id="text-page" class="text-page hidden" placeholder="키보드로 메모를 입력하세요 (휴대폰 키보드·블루투스 키보드 모두 가능)" aria-label="키보드 메모"></textarea>
+        <div id="media-page" class="media-page hidden"></div>
       </div>
     </div>
   </section>
 </main>
+
+<nav id="bottom-tabs" class="bottom-tabs" aria-label="보기">
+  <button data-view="month"><svg class="ic"><use href="#i-calendar"/></svg><span>월</span></button>
+  <button data-view="week"><svg class="ic"><use href="#i-week"/></svg><span>주</span></button>
+  <button data-view="list"><svg class="ic"><use href="#i-list"/></svg><span>메모</span></button>
+  <button data-view="todo"><svg class="ic"><use href="#i-check"/></svg><span>할 일</span></button>
+</nav>
+
+<!-- 떠 있는 메뉴 (날짜 길게 누르기, ＋ 길게 누르기, 서식 등) -->
+<div id="pop-menu" class="pop-menu hidden" role="menu"></div>
+
+<!-- 전체 검색 -->
+<div id="search-ov" class="overlay hidden" role="dialog" aria-label="검색">
+  <div class="sheet">
+    <div class="sheet-top">
+      <input id="search-input" type="search" placeholder="메모·손글씨·할 일·일정 검색" aria-label="검색어">
+      <button id="search-close" class="pill">닫기</button>
+    </div>
+    <div id="search-results" class="search-results"></div>
+  </div>
+</div>
+
+<!-- 범용 창 (내보내기, 휴지통, 서식, 잠금 설정) -->
+<div id="modal" class="overlay hidden" role="dialog">
+  <div class="sheet">
+    <div class="sheet-top">
+      <strong id="modal-title"></strong>
+      <button id="modal-close" class="pill">닫기</button>
+    </div>
+    <div id="modal-body" class="modal-body"></div>
+  </div>
+</div>
+
+<!-- 처음 쓰는 사람 안내 -->
+<div id="onboard" class="overlay hidden" role="dialog" aria-label="사용법">
+  <div class="sheet onboard">
+    <div id="onboard-step" class="onboard-step"></div>
+    <div class="onboard-nav">
+      <span id="onboard-dots" class="onboard-dots"></span>
+      <button id="onboard-skip" class="pill">건너뛰기</button>
+      <button id="onboard-next" class="pill primary">다음</button>
+    </div>
+  </div>
+</div>
+
+<!-- 앱 잠금 -->
+<div id="lock" class="lock hidden" role="dialog" aria-label="잠금">
+  <div class="lock-box">
+    <strong>필기캘린더 잠김</strong>
+    <div id="lock-dots" class="lock-dots"></div>
+    <div id="lock-pad" class="lock-pad"></div>
+    <button id="lock-bio" class="pill hidden">지문·얼굴로 열기</button>
+    <span id="lock-msg" class="muted-text"></span>
+  </div>
+</div>
 
 <div id="install-hint" class="install-hint hidden" role="dialog" aria-label="홈 화면에 추가">
   <div class="install-text">
@@ -184,6 +316,6 @@
   </div>
   <button id="install-hint-close" class="pill">닫기</button>
 </div>
-<div id="toast" class="toast hidden"></div>
+<div id="toast" class="toast hidden"><span id="toast-msg"></span><button id="toast-action" class="toast-action hidden"></button></div>
 </body>
 </html>

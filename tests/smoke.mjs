@@ -36,6 +36,8 @@ try {
     // 구글 연결 없이 시험
     await p.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
     await p.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+    // 첫 실행 안내·설치 안내는 건너뜀 (안내 자체는 따로 확인)
+    await p.addInitScript(() => { localStorage.setItem('onboarded', 'true'); localStorage.setItem('installHintClosed', 'true'); });
     await p.goto(base);
     await p.waitForSelector('.cell');
     check(`[${vp.name}] 월간 달력`, (await p.$$('.cell')).length >= 28);
@@ -65,20 +67,20 @@ try {
     await p.click('#back-btn');
     await p.waitForTimeout(500);
     check(`[${vp.name}] 달력 칸 필기 표시`, !!(await p.$('.cell.today .ink')));
-    await p.click('#view-seg [data-view=todo]');
+    await p.click('[data-view=todo] >> visible=true');
     await p.waitForTimeout(600);
     check(`[${vp.name}] 할 일 모아보기`, (await p.$$eval('#todo-items .todo-row', (r) => r.map((x) => x.textContent))).includes('보고서 제출'));
-    await p.click('#view-seg [data-view=week]');
+    await p.click('[data-view=week] >> visible=true');
     await p.waitForTimeout(400);
     check(`[${vp.name}] 주간 보기`, (await p.$$('.wcell')).length === 7);
-    await p.click('#view-seg [data-view=list]');
+    await p.click('[data-view=list] >> visible=true');
     await p.waitForTimeout(600);
     check(`[${vp.name}] 메모 모아보기`, (await p.$$('.list-item')).length >= 1);
 
     // 새로고침 뒤에도 남는지
     await p.reload();
     await p.waitForSelector('#list-items');
-    await p.click('#view-seg [data-view=month]');
+    await p.click('[data-view=month] >> visible=true');
     await p.click('.cell.today');
     await p.waitForTimeout(500);
     check(`[${vp.name}] 새로고침 뒤 탭 유지`, await p.evaluate(() => pad.doc.pages.length === 2));

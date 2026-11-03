@@ -27,6 +27,7 @@
 | `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`: 대시보드 변수를 지우지 않음) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
+| `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
 | `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~4단계, 우선순위순) |
@@ -57,6 +58,8 @@
 
 | 파일 | 내용 | 합치는 방식 |
 |---|---|---|
+| `trash.json` | 지운 탭 30일 보관(휴지통) `{탭id: {date, page, at, t}}` | 항목별 `t` 최신 (`syncedStore`) |
+| `templates.json` | 메모 서식 `{id: {name, text, order, t}}` | 항목별 `t` 최신 (`syncedStore`) |
 | `events.json` | 앱에서 적는 "메모 일정" | id별 `updated`가 최신인 쪽 |
 | `digests.json` | 달력 칸 한 줄 요약 `{날짜: {text, todos, at}}` | 날짜별 `at`이 최신인 쪽 |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
@@ -67,6 +70,14 @@
 
 - IndexedDB `handcal` / store `kv`에 키 `note:YYYY-MM-DD`로 하루 메모를 보관한다(드라이브 사본).
 - localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2` …)이 있다.
+
+## 화면 구성 (요약)
+
+- 상단: 달력/하루 이동, 검색(돋보기), 설정(톱니바퀴 + 동기화 상태 점). 로그인·동기화 버튼은 설정 안 "계정" 칸에 있다.
+- 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
+- 하루 화면: 탭 줄 → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`). 일정은 상단 "일정" 버튼의 시트/패널.
+- 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
+- 아직 만들지 않은 기능의 버튼은 `data-soon` 속성으로 숨긴다(완성하면 속성을 지운다).
 
 ## 할 일
 
@@ -103,7 +114,8 @@ npm i -D playwright   # 처음 한 번 (브라우저: npx playwright install chr
 node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오류가 있으면 종료 코드 1
 ```
 
-- 스크립트는 구글 연결 없이 "이 기기에만 저장" 모드로 돈다.
+- `node tests/ux.mjs [스크린샷 폴더]`로 화면 조작도 확인한다.
+- 스크립트는 구글 연결 없이 "이 기기에만 저장" 모드로 돈다. 첫 실행 안내는 `localStorage.onboarded`로 건너뛴다.
 - 구글·드라이브·Tasks·Worker가 얽힌 기능은 Playwright `page.route()`로 가짜 응답을 만들어 시험한다. 서비스 워커가 가로채지 않도록 `browser.newContext({ serviceWorkers: 'block' })`를 쓴다.
 
 ## 지켜야 할 것

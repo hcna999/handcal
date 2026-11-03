@@ -12,6 +12,18 @@ const WD = ['일', '월', '화', '수', '목', '금', '토'];
 
 const $ = (s) => document.querySelector(s);
 
+// 아이콘 (index.html의 <symbol>)
+function icon(name, cls = 'ic') {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', cls);
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(ns, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.append(use);
+  return svg;
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -556,7 +568,10 @@ state.calView = store.get('calView', 'month');
 state.weekStart = sundayOf(new Date());
 
 function renderMonth() {
-  $('#view-seg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.calView));
+  document.querySelectorAll('#view-seg button, #bottom-tabs button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === state.calView);
+    b.setAttribute('aria-selected', String(b.dataset.view === state.calView));
+  });
   const v = state.calView;
   $('#grid').classList.toggle('hidden', v !== 'month');
   $('.weekdays').classList.toggle('hidden', v === 'list' || v === 'todo');
@@ -777,7 +792,12 @@ function renderTextTodos() {
   box.classList.toggle('hidden', !todos.length);
   if (!todos.length) { box.replaceChildren(); return; }
   const left = todos.filter((t) => !t.done).length;
-  box.replaceChildren(el('div', 'text-todos-head', `할 일 ${todos.length}개 · 남은 것 ${left}개`), ...todos.map((t) => {
+  const open = store.get('textTodosOpen', false);
+  const head = el('button', 'text-todos-head', `할 일 ${todos.length} · 남음 ${left} ${open ? '▾' : '▸'}`);
+  head.setAttribute('aria-expanded', String(open));
+  head.onclick = () => { store.set('textTodosOpen', !open); renderTextTodos(); };
+  if (!open) { box.replaceChildren(head); return; }
+  box.replaceChildren(head, ...todos.map((t) => {
     const row = el('label', 'todo-row' + (t.done ? ' done' : ''));
     const cb = el('input');
     cb.type = 'checkbox';
@@ -841,7 +861,10 @@ function insertTodo() {
 
 async function renderMonthView() {
   const y = state.month.getFullYear(), m = state.month.getMonth();
-  $('#month-title').textContent = `${y}년 ${m + 1}월`;
+  // 휴대폰처럼 좁으면 '11월'처럼 짧게 (올해가 아니면 연도 붙임)
+  $('#month-title').textContent = window.matchMedia('(max-width: 599px)').matches
+    ? `${y === new Date().getFullYear() ? '' : y + '.'}${m + 1}월`
+    : `${y}년 ${m + 1}월`;
   const { start, end, weeks } = monthRange();
   const grid = $('#grid');
   grid.style.setProperty('--rows', weeks);
@@ -1357,6 +1380,7 @@ async function saveNow() {
   else if (docNeedsOcr(pad.doc)) { pad.lastEdit = Date.now(); autoOcr.touch(date); }
   if (!docEmpty(pad.doc)) refreshDigest(date, pad.doc);
   if (!auth.connected()) setStatus();
+  if (state.view === 'day' && state.date === date) renderOcr();
 }
 
 // 펜을 처음 쓰기 직전 몇 초 사이에 손으로 그려진 획(손바닥 오작동)을 지움
@@ -1420,6 +1444,8 @@ async function openDay(ds, { push = true } = {}) {
   state.view = 'day';
   state.date = ds;
   if (push) history[fromMonth ? 'pushState' : 'replaceState']({ day: ds }, '', '#' + ds);
+  document.body.classList.add('in-day');
+  hideMenu();
   $('#month-view').classList.add('hidden');
   $('#month-nav').classList.add('hidden');
   $('#day-view').classList.remove('hidden');
@@ -1464,6 +1490,7 @@ async function openDay(ds, { push = true } = {}) {
 
 async function closeDay() {
   await saveNow();
+  document.body.classList.remove('in-day');
   autoOcr.hurry(state.date);
   dayToken++;
   const d = parseYmd(state.date);
@@ -1484,10 +1511,10 @@ async function closeDay() {
 function tabLabel(page, i) {
   if (page.kind === 'text') {
     const first = firstLine(page.text);
-    return '⌨ ' + (first ? first.slice(0, 10) : `메모 ${i + 1}`);
+    return first ? first.slice(0, 10) : `메모 ${i + 1}`;
   }
   const first = (page.ocr?.text || '').split('\n').map((l) => l.replace(/^[-•\d.\s]+/, '').trim()).find(Boolean);
-  return '✍ ' + (first ? first.slice(0, 10) : `필기 ${i + 1}`);
+  return first ? first.slice(0, 10) : `필기 ${i + 1}`;
 }
 
 function renderTabs() {
@@ -1495,9 +1522,11 @@ function renderTabs() {
   const pages = pad.doc.pages;
   const items = pages.map((p, i) => {
     const b = el('button', 'page-tab' + (i === pad.pageIdx ? ' active' : ''));
-    b.append(el('span', 'page-tab-label', tabLabel(p, i)));
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(i === pad.pageIdx));
+    b.append(icon(p.kind === 'text' ? 'keyboard' : p.kind === 'photo' ? 'photo' : p.kind === 'voice' ? 'mic' : 'pen'), el('span', 'page-tab-label', tabLabel(p, i)));
     if (p.ocr && !needsOcr(p)) b.append(el('span', 'page-tab-done', '✓'));
-    b.title = p.kind === 'text' ? firstLine(p.text) || '키보드 메모' : p.ocr?.summary || `필기 ${i + 1}`;
+    b.title = p.kind === 'text' ? firstLine(p.text) || '키보드 메모' : p.kind ? tabLabel(p, i) : p.ocr?.summary || `필기 ${i + 1}`;
     b.onclick = () => switchPage(i);
     if (i === pad.pageIdx && pages.length > 1) {
       const x = el('span', 'page-tab-x', '✕');
@@ -1509,21 +1538,30 @@ function renderTabs() {
     return b;
   });
   if (pages.length < MAX_TABS) {
-    const add = el('button', 'page-tab add', '+');
-    add.title = `새 메모 탭 (최대 ${MAX_TABS}개)`;
+    const add = el('button', 'page-tab add');
+    add.append(icon('plus'));
+    add.title = `새 메모 탭 (최대 ${MAX_TABS}개) · 길게 누르면 종류 선택`;
     add.setAttribute('aria-label', '새 메모 탭');
-    add.onclick = () => addPage('text');
+    add.onclick = () => { if (!add._long) addPage('text'); add._long = false; };
+    onLongPress(add, (e) => { add._long = true; showNewTabMenu(e); });
     items.push(add);
   }
   const toInk = pad.note.kind === 'text';
   if (toInk) {
-    const todoBtn = el('button', 'page-tab todo-insert', '☐ 할 일');
+    const todoBtn = el('button', 'page-tab todo-insert');
+    todoBtn.append(icon('check'), el('span', null, '할 일'));
     todoBtn.title = '할 일 줄 넣기';
     todoBtn.addEventListener('pointerdown', (e) => e.preventDefault()); // 입력칸 포커스 유지
     todoBtn.onclick = insertTodo;
     items.push(todoBtn);
+    const tplBtn = el('button', 'page-tab', '서식');
+    tplBtn.title = '메모 서식 넣기 (회의록 등)';
+    tplBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+    tplBtn.onclick = (e) => showTemplateMenu(e);
+    items.push(tplBtn);
   }
-  const kindBtn = el('button', 'page-tab kind-toggle', toInk ? '✍ 필기로' : '⌨ 타자로');
+  const kindBtn = el('button', 'page-tab kind-toggle');
+  kindBtn.append(icon(toInk ? 'pen' : 'keyboard'), el('span', null, toInk ? '필기로' : '타자로'));
   kindBtn.title = toInk ? '손글씨로 쓰기' : '키보드로 쓰기';
   kindBtn.onclick = toggleKind;
   items.push(kindBtn);
@@ -1568,8 +1606,8 @@ function toggleKind() {
 }
 
 // 마우스·키보드 기기에서만 바로 입력 칸에 커서 (휴대폰은 키보드가 갑자기 올라오지 않게)
-function focusText() {
-  if (!window.matchMedia('(pointer: coarse)').matches) $('#text-page').focus();
+function focusText(force) {
+  if (force || !window.matchMedia('(pointer: coarse)').matches) $('#text-page').focus();
 }
 
 // 키보드 메모 탭으로 이동 (없으면 만들거나, 지금 탭이 빈 필기면 타자 탭으로 바꿈)
@@ -1600,8 +1638,14 @@ function openTextTab() {
 
 function deletePage(i) {
   const page = pad.doc.pages[i];
-  if (page.strokes.length && !confirm(`'${tabLabel(page, i)}' 탭을 삭제할까요? 되돌릴 수 없어요.`)) return;
+  const hasContent = page.strokes.length || (page.text || '').trim() || page.media?.length;
+  if (hasContent && !confirm(`'${tabLabel(page, i)}' 탭을 삭제할까요? (휴지통에 30일 보관)`)) return;
   pad.doc.pages.splice(i, 1);
+  const date = state.date;
+  if (hasContent) {
+    trash.add(date, page);
+    toast('탭을 지웠어요', 5000, { label: '되돌리기', fn: () => restorePage(date, page, i) });
+  }
   pad.pageIdx = Math.min(i, pad.doc.pages.length - 1);
   pad.undo = [];
   pad.redo = [];
@@ -1611,6 +1655,32 @@ function deletePage(i) {
   layoutPad();
   saveSoon();
   refreshDigest(state.date, pad.doc);
+}
+
+// 지운 탭 되살리기 (되돌리기 토스트·휴지통에서)
+async function restorePage(date, page, at) {
+  const open = state.view === 'day' && state.date === date;
+  const doc = open ? pad.doc : await notes.get(date);
+  if (doc.pages.some((p) => p.id === page.id)) return;
+  if (doc.pages.length >= MAX_TABS) {
+    const empty = doc.pages.findIndex((p) => !p.strokes.length && !(p.text || '').trim() && !p.media?.length);
+    if (empty < 0) return toast(`그날 탭이 ${MAX_TABS}개로 가득 차서 되살릴 수 없어요`);
+    doc.pages.splice(empty, 1);
+  }
+  doc.pages.splice(Math.min(at ?? doc.pages.length, doc.pages.length), 0, page);
+  trash.remove(page.id);
+  if (open) {
+    pad.pageIdx = doc.pages.indexOf(page);
+    renderTabs();
+    renderOcr();
+    layoutPad();
+    saveSoon();
+  } else {
+    await notes.put(date, cloneDoc(doc));
+    listState.cache.set(date, doc);
+  }
+  refreshDigest(date, doc);
+  toast('되살렸어요');
 }
 
 function shiftDay(n) {
@@ -1650,7 +1720,7 @@ async function renderDayEvents() {
     if (state.date !== ds) return;
     const evs = events.on(all, day);
     $('#events-summary').textContent = evs.length ? `일정 ${evs.length}개` : '일정';
-    $('#panel-toggle').textContent = evs.length ? `일정 ${evs.length} · 요약` : '일정·요약';
+    $('#panel-toggle').textContent = evs.length ? `일정 ${evs.length}` : '일정';
     if (!evs.length) { list.replaceChildren(el('li', 'muted', '일정이 없어요')); return; }
     list.replaceChildren(...evs.map((ev) => {
       const li = el('li');
@@ -1988,6 +2058,17 @@ const autoOcr = {
 
 function renderOcr() {
   const o = pad.note.ocr;
+  // 손글씨 탭에 필기가 있을 때만 위에 한 줄 카드로 (펼치면 원문 편집)
+  const show = !pad.note.kind && pad.note.strokes.length > 0;
+  $('#ocr-panel').classList.toggle('hidden', !show);
+  const openCard = store.get('ocrOpen', false);
+  $('#ocr-body').classList.toggle('hidden', !openCard);
+  $('#ocr-head').setAttribute('aria-expanded', String(openCard));
+  $('#ocr-more').textContent = openCard ? '접기' : '자세히';
+  $('#ocr-line').textContent = o
+    ? (needsOcr(pad.note) ? '(고친 필기는 잠시 뒤 다시 변환) ' : '') + (firstLine(o.text) || '(글자 없음)')
+    : !CFG.WORKER_URL ? '글자 변환은 중계 서버를 연결하면 쓸 수 있어요'
+    : '손글씨 → 글자 변환 대기 중…';
   $('#ocr-btn').textContent = o ? '다시 변환' : '지금 변환';
   $('#ocr-copy').classList.toggle('hidden', !o);
   $('#ocr-result').classList.toggle('hidden', !o);
@@ -2032,6 +2113,8 @@ function setStatus(kind) {
     if (!auth.connected()) kind = auth.wasSignedIn() ? 'expired' : 'local';
     else kind = notes.pending.size ? 'saving' : 'synced';
   }
+  $('#sync-dot').dataset.state = kind;
+  $('#offline-bar').classList.toggle('hidden', kind !== 'offline');
   s.textContent = {
     local: '이 기기에만 저장',
     expired: '연결 만료 · 기기에 저장 중',
@@ -2043,9 +2126,15 @@ function setStatus(kind) {
 }
 
 let toastTimer = null;
-function toast(msg, ms = 3000) {
+function toast(msg, ms = 3000, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  $('#toast-msg').textContent = msg;
+  const a = $('#toast-action');
+  a.classList.toggle('hidden', !action);
+  if (action) {
+    a.textContent = action.label;
+    a.onclick = () => { t.classList.add('hidden'); action.fn(); };
+  }
   t.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
@@ -2113,6 +2202,8 @@ async function afterSignIn() {
     await notes.syncIndex();
     await memos.sync();
     await digests.sync();
+    trash.sync().catch(console.warn);
+    templates.sync().catch(console.warn);
     events.reset();
     rerender();
     await notes.flush();
@@ -2398,6 +2489,279 @@ function renderTasksStatus() {
     : '연동 준비 중…';
 }
 
+// ---------- 드라이브에 JSON 하나를 두고 항목별로 더 최근 것을 합치는 저장소 (휴지통·서식·색인)
+function syncedStore(fileName, storeKey, keepDays = 60) {
+  return {
+    fileId: null,
+    syncing: null,
+    timer: null,
+    all() { return store.get(storeKey, {}); },
+    live() { return Object.entries(this.all()).filter(([, v]) => !v.deleted); },
+    get(k) { const v = this.all()[k]; return v && !v.deleted ? v : null; },
+    put(k, v) {
+      const a = this.all();
+      a[k] = { ...v, t: Date.now() };
+      store.set(storeKey, a);
+      this.later();
+    },
+    del(k) {
+      const a = this.all();
+      if (!a[k] || a[k].deleted) return;
+      a[k] = { deleted: true, t: Date.now() };
+      store.set(storeKey, a);
+      this.later();
+    },
+    later() {
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.sync().catch(handleErr), 2000);
+    },
+    sync() {
+      if (!auth.connected()) return Promise.resolve();
+      if (!this.syncing) this.syncing = this._sync().finally(() => { this.syncing = null; });
+      return this.syncing;
+    },
+    async _sync() {
+      if (!this.fileId) {
+        const fid = await drive.ensureFolder();
+        const q = encodeURIComponent(`'${fid}' in parents and name='${fileName}' and trashed=false`);
+        this.fileId = (await gapi(`${DRIVE}?q=${q}&fields=files(id)`)).files[0]?.id || null;
+      }
+      let remote = {};
+      if (this.fileId) {
+        const d = await drive.read(this.fileId);
+        remote = (typeof d === 'string' ? JSON.parse(d) : d)?.items || {};
+      }
+      const merged = { ...remote };
+      for (const [k, v] of Object.entries(this.all())) if (!merged[k] || (v.t || 0) > (merged[k].t || 0)) merged[k] = v;
+      const cutoff = Date.now() - keepDays * 86400e3;
+      for (const [k, v] of Object.entries(merged)) if ((v.t || 0) < cutoff && (v.deleted || keepDays < 365)) delete merged[k];
+      store.set(storeKey, merged);
+      if (JSON.stringify(merged) !== JSON.stringify(remote)) {
+        const payload = { v: 1, items: merged };
+        if (this.fileId) await drive.update(this.fileId, payload);
+        else this.fileId = (await drive.create(fileName, payload)).id;
+      }
+    },
+  };
+}
+
+// 휴지통: 지운 탭을 30일 보관 (드라이브 trash.json으로 기기끼리 공유)
+const trash = Object.assign(syncedStore('trash.json', 'trash', 30), {
+  add(date, page) { this.put(page.id, { date, page, at: Date.now() }); },
+  remove(id) { this.del(id); },
+  list() { return this.live().map(([id, v]) => ({ id, ...v })).sort((a, b) => b.at - a.at); },
+});
+
+// 메모 서식 (드라이브 templates.json으로 공유, 오래돼도 지우지 않음)
+const templates = Object.assign(syncedStore('templates.json', 'templates', 3650), {
+  list() {
+    const items = this.live().map(([id, v]) => ({ id, ...v })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    if (items.length || store.get('templatesInit', false)) return items;
+    // 처음엔 기본 서식 두 개
+    store.set('templatesInit', true);
+    this.put('tpl-meeting', { name: '회의록', text: '회의록 · {날짜}\n참석자: \n안건\n- \n결정\n- \n할 일\n☐ ', order: 0 });
+    this.put('tpl-daily', { name: '하루 정리', text: '{날짜} 정리\n오늘 한 일\n- \n내일 할 일\n☐ \n메모\n', order: 1 });
+    return this.list();
+  },
+});
+
+// ---------- 떠 있는 메뉴·길게 누르기·위에 뜬 창 닫기
+function showMenu(e, items) {
+  const m = $('#pop-menu');
+  m.replaceChildren(...items.map((it) => {
+    if (it.input) {
+      const f = el('form', 'pop-input');
+      const inp = el('input');
+      inp.placeholder = it.input.placeholder;
+      inp.enterKeyHint = 'done';
+      f.append(inp);
+      f.onsubmit = (ev) => { ev.preventDefault(); const v = inp.value.trim(); hideMenu(); if (v) it.input.onSubmit(v); };
+      setTimeout(() => inp.focus(), 30);
+      return f;
+    }
+    const b = el('button', 'pop-item');
+    b.setAttribute('role', 'menuitem');
+    if (it.icon) b.append(icon(it.icon));
+    b.append(el('span', null, it.label));
+    b.onclick = () => {
+      if (it.keepOpen) return it.fn(b);
+      hideMenu();
+      it.fn();
+    };
+    return b;
+  }));
+  m.classList.remove('hidden');
+  const x = e?.clientX ?? window.innerWidth / 2, y = e?.clientY ?? window.innerHeight / 2;
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+}
+function hideMenu() { $('#pop-menu').classList.add('hidden'); }
+
+function onLongPress(target, fn, ms = 500) {
+  let timer = null, sx = 0, sy = 0;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  target.addEventListener('pointerdown', (e) => {
+    sx = e.clientX; sy = e.clientY;
+    cancel();
+    timer = setTimeout(() => { timer = null; navigator.vibrate?.(15); fn(e); }, ms);
+  });
+  target.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) target.addEventListener(t, cancel);
+  target.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+// Esc나 뒤로가기: 가장 위에 열린 것부터 하나 닫음. 닫은 게 있으면 true
+function closeTopLayer() {
+  if (!$('#pop-menu').classList.contains('hidden')) { hideMenu(); return true; }
+  for (const id of ['#modal', '#search-ov', '#onboard']) {
+    if (!$(id).classList.contains('hidden')) { $(id).classList.add('hidden'); return true; }
+  }
+  if (!$('#settings').classList.contains('hidden')) { $('#settings').classList.add('hidden'); $('#settings-btn').setAttribute('aria-expanded', 'false'); return true; }
+  if (state.view === 'day' && isNarrow() && panelVisible()) { setPanel(false); return true; }
+  if (state.view === 'day' && typeof lasso !== 'undefined' && lasso.sel.size) { lasso.clear(); return true; }
+  return false;
+}
+
+// ---------- 빠른 동작: 날짜 길게 누르기, ＋ 버튼, 새 탭 종류
+async function addTodoTo(ds, text) {
+  const open = state.view === 'day' && state.date === ds;
+  const doc = open ? pad.doc : await notes.get(ds);
+  const page = appendTodoLine(doc, text);
+  if (!page) return toast(`그날 탭이 ${MAX_TABS}개로 가득 찼어요`);
+  if (open) { $('#text-page').dataset.pageId = ''; layoutPad(); renderTabs(); saveSoon(); }
+  else { await notes.put(ds, cloneDoc(doc)); listState.cache.set(ds, doc); }
+  refreshDigest(ds, doc);
+  if (state.view === 'month') renderMonth();
+  toast(`${parseYmd(ds).getMonth() + 1}월 ${parseYmd(ds).getDate()}일에 할 일을 넣었어요`);
+}
+
+// 손글씨 탭 열기: 지금 탭이 빈 메모면 손글씨로 바꾸고, 아니면 새 손글씨 탭
+function openInkTab() {
+  const cur = pad.note;
+  if (cur.kind === 'text' && !(cur.text || '').trim()) toggleKind();
+  else if (cur.kind) addPage('ink');
+}
+
+const READY = { media: false };
+function dayActions(ds) {
+  return [
+    { label: '할 일 추가', icon: 'check', keepOpen: true, fn: () => showMenu(null, [{ input: { placeholder: "할 일 (예: 금요일까지 보고서)", onSubmit: (v) => addTodoTo(ds, v) } }]) },
+    { label: '키보드 메모', icon: 'keyboard', fn: () => openDay(ds).then(() => focusText(true)) },
+    { label: '손글씨', icon: 'pen', fn: () => openDay(ds).then(openInkTab) },
+    ...(READY.media ? [
+      { label: '사진 메모', icon: 'photo', fn: () => openDay(ds).then(() => addPage('photo')) },
+      { label: '음성 메모', icon: 'mic', fn: () => openDay(ds).then(() => addPage('voice')) },
+    ] : []),
+    { label: '메모 일정 추가', icon: 'calendar', fn: () => openDay(ds).then(() => { setPanel(true); $('#ev-title').focus(); }) },
+  ];
+}
+
+function showNewTabMenu(e) {
+  showMenu(e, [
+    { label: '키보드 메모 탭', icon: 'keyboard', fn: () => addPage('text') },
+    { label: '손글씨 탭', icon: 'pen', fn: () => addPage('ink') },
+    ...(READY.media ? [
+      { label: '사진 탭', icon: 'photo', fn: () => addPage('photo') },
+      { label: '음성 탭', icon: 'mic', fn: () => addPage('voice') },
+    ] : []),
+  ]);
+}
+
+// 서식 넣기: {날짜}는 그날 날짜로
+function showTemplateMenu(e) {
+  const items = templates.list();
+  showMenu(e, [
+    ...items.map((t) => ({ label: t.name, fn: () => insertTemplate(t.text) })),
+    { label: '서식 고치기…', icon: 'gear', fn: openTemplateEditor },
+  ]);
+}
+function insertTemplate(text) {
+  const d = parseYmd(state.date);
+  const body = text.replaceAll('{날짜}', `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`);
+  const ta = $('#text-page');
+  if (document.activeElement !== ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  const pos = ta.selectionStart;
+  const before = ta.value.slice(0, pos);
+  ta.setRangeText((before && !before.endsWith('\n') ? '\n' : '') + body, pos, ta.selectionEnd, 'end');
+  ta.dispatchEvent(new Event('input'));
+}
+
+// ---------- 범용 창
+function openModal(title, nodes) {
+  $('#modal-title').textContent = title;
+  $('#modal-body').replaceChildren(...nodes);
+  $('#modal').classList.remove('hidden');
+  $('#settings').classList.add('hidden');
+}
+function closeModal() { $('#modal').classList.add('hidden'); }
+
+function openTemplateEditor() {
+  const rows = el('div', 'tpl-list');
+  const draw = () => {
+    rows.replaceChildren(...templates.list().map((t) => {
+      const box = el('div', 'tpl-item');
+      const name = el('input');
+      name.value = t.name;
+      name.placeholder = '서식 이름';
+      const text = el('textarea');
+      text.value = t.text;
+      text.rows = 6;
+      const save = () => templates.put(t.id, { name: name.value.trim() || '서식', text: text.value, order: t.order });
+      name.onchange = save;
+      text.onchange = save;
+      const del = el('button', 'pill danger', '삭제');
+      del.onclick = () => { if (confirm(`'${t.name}' 서식을 지울까요?`)) { templates.del(t.id); draw(); } };
+      box.append(name, text, del);
+      return box;
+    }));
+  };
+  draw();
+  const add = el('button', 'pill primary', '+ 서식 추가');
+  add.onclick = () => { templates.put('tpl-' + Date.now().toString(36), { name: '새 서식', text: '{날짜}\n', order: templates.list().length }); draw(); };
+  openModal('메모 서식', [el('p', 'muted-text', '{날짜}는 넣을 때 그날 날짜로 바뀌어요.'), rows, add]);
+}
+
+function openTrash() {
+  const items = trash.list();
+  const now = Date.now();
+  openModal('휴지통 (30일 보관)', items.length ? items.map((it) => {
+    const d = parseYmd(it.date);
+    const row = el('div', 'trash-row');
+    const left = Math.max(0, 30 - Math.floor((now - it.at) / 86400e3));
+    const what = it.page.kind === 'text' ? firstLine(it.page.text) || '키보드 메모'
+      : it.page.kind === 'photo' ? '사진 메모' : it.page.kind === 'voice' ? '음성 메모'
+      : it.page.ocr?.text ? firstLine(it.page.ocr.text) : '손글씨';
+    row.append(el('span', 'trash-what', `${d.getMonth() + 1}월 ${d.getDate()}일 · ${what}`), el('span', 'muted-text', `${left}일 남음`));
+    const b = el('button', 'pill', '되살리기');
+    b.onclick = async () => { await restorePage(it.date, it.page); openTrash(); };
+    row.append(b);
+    return row;
+  }) : [el('p', 'muted-text', '휴지통이 비어 있어요.')]);
+}
+
+// ---------- 처음 쓰는 사람 안내
+const ONBOARD = [
+  ['날짜를 누르면 그날 메모', '달력에서 날짜를 누르면 그날 메모가 열려요. 오른쪽 아래 ＋는 오늘 메모, 날짜를 길게 누르면 할 일·일정을 바로 넣어요.'],
+  ['타자 ↔ 손글씨', '기본은 키보드 메모예요. 오른쪽 위 [필기로]를 누르면 펜으로 써요. 손글씨는 잠시 뒤 자동으로 글자로 바뀌고 달력에 요약이 보여요.'],
+  ['할 일', "줄 앞에 [] + 스페이스를 치면 ☐ 할 일이 돼요. '금요일까지 보고서'처럼 쓰면 기한을 알아서 잡고, 구글 Tasks와도 연동돼요."],
+  ['모아 보고 찾기', '월·주·메모·할 일로 모아 보고, 돋보기로 메모·손글씨·일정을 한 번에 찾아요. 설정(톱니바퀴)에 서식·내보내기·휴지통이 있어요.'],
+];
+function showOnboarding() {
+  let i = 0;
+  const draw = () => {
+    const [t, d] = ONBOARD[i];
+    $('#onboard-step').replaceChildren(el('h2', null, t), el('p', null, d));
+    $('#onboard-dots').replaceChildren(...ONBOARD.map((_, k) => el('span', 'dot-step' + (k === i ? ' on' : ''))));
+    $('#onboard-next').textContent = i === ONBOARD.length - 1 ? '시작하기' : '다음';
+  };
+  const done = () => { store.set('onboarded', true); $('#onboard').classList.add('hidden'); };
+  $('#onboard-next').onclick = () => { if (++i >= ONBOARD.length) done(); else draw(); };
+  $('#onboard-skip').onclick = done;
+  draw();
+  $('#onboard').classList.remove('hidden');
+}
+
 // ---------- 설정: 글자 크기 · 화면 모드
 const UI_SCALES = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
 
@@ -2496,6 +2860,23 @@ function bind() {
 
   // 달력: 날짜 탭 → 하루 화면, 좌우 스와이프 → 달 이동
   $('#view-seg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setCalView(b.dataset.view); });
+  $('#bottom-tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setCalView(b.dataset.view); });
+  // ＋: 누르면 오늘 메모, 길게 누르면 종류 선택
+  const fab = $('#fab');
+  let fabLong = false;
+  fab.onclick = () => {
+    if (fabLong) { fabLong = false; return; }
+    openDay(ymd(new Date())).then(() => { if (pad.note.kind === 'text') focusText(true); });
+  };
+  onLongPress(fab, (e) => { fabLong = true; showMenu(e, dayActions(ymd(new Date()))); });
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#pop-menu')) hideMenu(); }, true);
+  $('#modal-close').onclick = closeModal;
+  $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+  $('#open-trash').onclick = () => trash.sync().catch(() => {}).finally(openTrash);
+  $('#open-templates').onclick = openTemplateEditor;
+  $('#open-onboard').onclick = () => { $('#settings').classList.add('hidden'); showOnboarding(); };
+  $('#sync-now').onclick = () => { lastRefresh = 0; notes.lastSync = 0; refreshInBackground(); notes.flush(); };
+  $('#ocr-head').onclick = () => { store.set('ocrOpen', !store.get('ocrOpen', false)); renderOcr(); };
   $('#list-search').addEventListener('input', () => { clearTimeout(listState.searchTimer); listState.searchTimer = setTimeout(renderList, 250); });
   $('#list-more').onclick = () => { listState.shown += LIST_PAGE; renderList(); };
   $('#list-items').addEventListener('click', (e) => { const it = e.target.closest('.list-item'); if (it) openDay(it.dataset.date); });
@@ -2503,15 +2884,28 @@ function bind() {
 }
 
 function attachSwipe(grid) {
-  let drag = null, swiped = false;
+  let drag = null, swiped = false, pressTimer = null;
+  grid.addEventListener('contextmenu', (e) => { if (e.target.closest('.cell, .wcell')) e.preventDefault(); });
   grid.addEventListener('pointerdown', (e) => {
     if (monthAnimating) return;
+    const cell = e.target.closest('.cell, .wcell');
+    clearTimeout(pressTimer);
+    if (cell) {
+      pressTimer = setTimeout(() => {
+        if (drag?.active) return;
+        drag = null;
+        swiped = true; // 손을 뗄 때 날짜가 열리지 않게
+        navigator.vibrate?.(15);
+        showMenu(e, dayActions(cell.dataset.date));
+      }, 500);
+    }
     drag = { x: e.clientX, y: e.clientY, id: e.pointerId, t: Date.now(), active: false };
     swiped = false;
   });
   grid.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.hypot(dx, dy) > 10) clearTimeout(pressTimer);
     if (!drag.active) {
       if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
         drag.active = true;
@@ -2526,6 +2920,7 @@ function attachSwipe(grid) {
     grid.style.opacity = String(1 - Math.min(0.5, Math.abs(dx) / grid.clientWidth));
   });
   const endDrag = (e) => {
+    clearTimeout(pressTimer);
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag;
     drag = null;
@@ -2677,7 +3072,8 @@ function bindPad() {
 
   // 키보드 (윈도우)
   document.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, textarea')) return;
+    if (e.key === 'Escape' && closeTopLayer()) { e.preventDefault(); return; }
+    if (e.target.matches('input, textarea, select')) return;
     if (state.view === 'day') {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? restore(pad.redo, pad.undo) : restore(pad.undo, pad.redo); }
@@ -2750,6 +3146,7 @@ async function init() {
   renderMonth();
   if (openToday) openDay(ymd(new Date()));
   showInstallHint();
+  if (!store.get('onboarded', false)) showOnboarding();
   if (auth.connected()) { watchExpiry(); afterSignIn(); }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
