@@ -450,10 +450,10 @@ const notes = {
           const f = r ? await drive.update(r.id, payload) : await drive.create(d + '.json', payload);
           this.remote.set(d, f);
           const cur = await idb.get('note:' + d);
-          if (cur && cur.updated === raw.updated) {
+          if (cur) {
             cur.remoteTime = f.modifiedTime;
             await idb.set('note:' + d, cur);
-            this.pending.delete(d);
+            if (cur.updated === raw.updated) this.pending.delete(d);
           }
         } else {
           if (r) {
@@ -938,16 +938,18 @@ async function renderWeek() {
     return;
   }
   events.prefetch(addDays(start, -28), addDays(end, 28));
-  // 메모 미리보기는 노트를 읽어서 채움
-  for (const { ds, memo } of cells) {
-    if (!notes.has(ds)) continue;
-    try {
-      const doc = await notes.get(ds);
-      if (token !== weekToken) return;
-      for (const it of docPreview(doc)) {
-        memo.append(el('div', 'wmemo-item' + (it.kind === 'text' ? ' typed' : ''), it.text || '✎ 손글씨 (글자 변환 대기)'));
-      }
-    } catch (e) { console.warn(e); }
+  // 메모 미리보기는 노트를 읽어서 채움 ('메모 일정' 표시가 꺼져 있으면 숨김)
+  if (!hiddenCals().has(MEMO_CAL)) {
+    for (const { ds, memo } of cells) {
+      if (!notes.has(ds)) continue;
+      try {
+        const doc = await notes.get(ds);
+        if (token !== weekToken) return;
+        for (const it of docPreview(doc)) {
+          memo.append(el('div', 'wmemo-item' + (it.kind === 'text' ? ' typed' : ''), it.text || '✎ 손글씨 (글자 변환 대기)'));
+        }
+      } catch (e) { console.warn(e); }
+    }
   }
 }
 
@@ -1609,7 +1611,7 @@ async function renderMonthView() {
       for (let l = visible; l < lanes.length; l++) if (lanes[l][col]) hidden++;
       if (hidden) cell.append(el('div', 'more', `+${hidden}개`));
     }
-    const dg = digests.get(ds);
+    const dg = !hiddenCals().has(MEMO_CAL) ? digests.get(ds) : null;
     if (dg?.text) {
       const line = el('div', 'digest', dg.text);
       if (dg.todos) line.prepend(el('span', 'digest-todo', `☐${dg.todos} `));
@@ -4217,11 +4219,20 @@ function mergeDocs(local, remote, base) {
     const same = JSON.stringify({ ...lp, t: 0 }) === JSON.stringify({ ...rp, t: 0 });
     if (same) { pages.push(lt >= rt ? lp : rp); continue; }
     // 둘 다 지난 동기화 뒤에 고쳤으면: 최신 것을 쓰고 다른 쪽은 '충돌 사본' 탭으로 살림
+    // 단, 손글씨 획이나 사진·녹음 파일은 똑같고 OCR 원문/요약만 고친 경우에는 탭을 복제하지 않고 최신 수정본으로 덮어씀
     pages.push(lt >= rt ? lp : rp);
-    if (lt > base && rt > base) {
+    const sameContentExceptOcr = !lp.kind && !rp.kind && inkSig(lp) === inkSig(rp);
+    if (lt > base && rt > base && !sameContentExceptOcr) {
       const older = lt >= rt ? rp : lp;
-      pages.push({ ...older, id: older.id + '-c' + Date.now().toString(36), t: Date.now(), conflict: true, ...(older.kind === 'text' || older.kind === 'voice' ? { text: '(다른 기기에서 고친 내용)\n' + (older.text || '') } : {}) });
-      conflicts++;
+      const baseId = older.id.replace(/-c[0-9a-z]+$/i, '');
+      const cid = baseId + '-c' + Date.now().toString(36);
+      // 이미 같은 내용의 충돌 사본이 있으면 또 만들지 않음
+      const olderSig = JSON.stringify({ ...older, id: '', t: 0, conflict: undefined });
+      const dup = pages.some((p) => p.conflict && JSON.stringify({ ...p, id: '', t: 0, conflict: undefined }) === olderSig);
+      if (!dup && pages.length < MAX_TABS) {
+        pages.push({ ...older, id: cid, t: Date.now(), conflict: true, ...(older.kind === 'text' || older.kind === 'voice' ? { text: '(다른 기기에서 고친 내용)\n' + (older.text || '') } : {}) });
+        conflicts++;
+      }
     }
   }
   for (const rp of rById.values()) if (!(local.gone?.[rp.id] > (rp.t || 0))) pages.push(rp);
