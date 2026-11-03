@@ -29,6 +29,7 @@
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~4단계, 우선순위순) |
 
 ## app.js 구역
 
