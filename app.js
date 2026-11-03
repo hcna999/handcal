@@ -538,6 +538,10 @@ const naver = {
       err.code = data.error;
       throw err;
     }
+    if (Array.isArray(data.calendars) && data.calendars.length) {
+      store.set('naverCals', data.calendars);
+      renderCalFilter();
+    }
     return (data.events || []).map((x) => ({
       id: x.id,
       title: x.title,
@@ -580,7 +584,8 @@ const events = {
 
   on(list, day) {
     const s = day, e = addDays(day, 1);
-    return list.filter((ev) => ev.start < e && (ev.end > s || (+ev.start === +ev.end && ev.start >= s)));
+    const hidden = hiddenCals();
+    return list.filter((ev) => !hidden.has(calKey(ev)) && ev.start < e && (ev.end > s || (+ev.start === +ev.end && ev.start >= s)));
   },
 
   add(ev) { memos.add(ev); this.clear(); },
@@ -655,6 +660,8 @@ function renderMonth() {
   $('#week-grid').classList.toggle('hidden', v !== 'week');
   $('#list-view').classList.toggle('hidden', v !== 'list');
   for (const id of ['#prev-month', '#next-month', '#today-btn']) $(id).classList.toggle('hidden', v === 'list' || v === 'todo');
+  miniState.month = v === 'week' && state.weekStart ? new Date(addDays(state.weekStart, 3).getFullYear(), addDays(state.weekStart, 3).getMonth(), 1) : state.month;
+  renderMiniCal();
   if (v === 'todo') return renderTodos();
   if (v === 'week') return renderWeek();
   if (v === 'list') return renderList();
@@ -1049,7 +1056,7 @@ function holidaysOf(y) {
   holidayCache.set(y, h);
   return h;
 }
-const holidayOn = (d) => holidaysOf(d.getFullYear()).get(ymd(d)) || null;
+const holidayOn = (d) => (hiddenCals().has(HOLIDAY_CAL) ? null : holidaysOf(d.getFullYear()).get(ymd(d)) || null);
 
 function lunarLabel(d) {
   const mode = store.get('lunar', 'key');
@@ -1111,7 +1118,7 @@ async function runSearch() {
       }
     }
   }
-  for (const ev of [...(searchState.events || []), ...memos.visible(new Date(2000, 0, 1), new Date(2100, 0, 1))]) {
+  for (const ev of [...(searchState.events || []), ...memos.visible(new Date(2000, 0, 1), new Date(2100, 0, 1))].filter((x) => !hiddenCals().has(calKey(x)))) {
     if (ev.title.toLowerCase().includes(q)) hits.push({ ds: ymd(ev.start), type: '일정', text: (ev.allDay ? '' : hm(ev.start) + ' ') + ev.title });
   }
   if (token !== searchState.token) return;
@@ -2923,6 +2930,7 @@ async function afterSignIn() {
     trash.sync().catch(console.warn);
     templates.sync().catch(console.warn);
     noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
+    prefs.sync().then(() => { renderCalFilter(); rerender(); }).catch(console.warn);
     events.reset();
     rerender();
     await notes.flush();
@@ -3702,6 +3710,84 @@ function openLockSettings() {
   openModal('앱 잠금', nodes);
 }
 
+// ---------- 캘린더별 켜고 끄기 (드라이브 prefs.json으로 기기끼리 같게)
+const MEMO_CAL = '메모 일정', HOLIDAY_CAL = '공휴일';
+const prefs = syncedStore('prefs.json', 'prefs', 36500);
+const calKey = (ev) => (ev.source === 'memo' ? MEMO_CAL : ev.calendar || '네이버 캘린더');
+function hiddenCals() { return new Set(prefs.get('hiddenCals')?.list || []); }
+function setCalVisible(name, visible) {
+  const h = hiddenCals();
+  if (visible) h.delete(name); else h.add(name);
+  prefs.put('hiddenCals', { list: [...h] });
+  renderCalFilter();
+  if (state.view === 'month') renderMonth();
+  else renderDayEvents();
+}
+function renderCalFilter() {
+  const box = $('#cal-filter');
+  if (!box) return;
+  const hidden = hiddenCals();
+  const row = (c) => {
+    const r = el('label', 'cal-row');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = !hidden.has(c.name);
+    cb.style.setProperty('--c', c.color || '#03c75a');
+    cb.onchange = () => setCalVisible(c.name, cb.checked);
+    r.title = c.name;
+    r.append(cb, el('span', 'cal-name', c.name));
+    return r;
+  };
+  const naverCals = store.get('naverCals', []);
+  const groups = [
+    ['네이버 캘린더', naverCals.length ? naverCals : null],
+    ['이 앱', [{ name: MEMO_CAL, color: '#2563eb' }, { name: HOLIDAY_CAL, color: '#dc2626' }]],
+  ];
+  box.replaceChildren(...groups.flatMap(([title, cals]) => [
+    el('h3', 'cal-group-title', title),
+    ...(cals ? cals.map(row) : [el('div', 'cal-empty', naver.enabled() ? '불러오는 중…' : '로그인하면 나타나요')]),
+  ]));
+}
+
+// 왼쪽 캘린더 목록 창 (넓은 화면은 옆에 붙고, 좁은 화면은 서랍처럼 덮음)
+const miniState = { month: null };
+const isWideSide = () => window.matchMedia('(min-width: 900px)').matches;
+function setSide(open) {
+  document.body.classList.toggle('side-on', open);
+  $('#side-btn').setAttribute('aria-expanded', String(open));
+  if (isWideSide()) store.set('sideOpen', open);
+  if (open) { renderCalFilter(); renderMiniCal(); }
+}
+function renderMiniCal() {
+  const box = $('#mini-grid');
+  if (!box || !document.body.classList.contains('side-on')) return;
+  const m = miniState.month || state.month;
+  miniState.month = m;
+  $('#mini-title').textContent = `${m.getFullYear()}.${String(m.getMonth() + 1).padStart(2, '0')}`;
+  const today = ymd(new Date());
+  const start = sundayOf(m);
+  const cells = ['일', '월', '화', '수', '목', '금', '토'].map((d, i) => el('span', 'mini-dow' + (i === 0 ? ' sun' : i === 6 ? ' sat' : ''), d));
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(start, i);
+    const ds = ymd(d);
+    const b = el('button', 'mini-day', String(d.getDate()));
+    if (d.getMonth() !== m.getMonth()) b.classList.add('other');
+    if (d.getDay() === 0 || holidayOn(d)) b.classList.add('sun');
+    else if (d.getDay() === 6) b.classList.add('sat');
+    if (ds === today) b.classList.add('today');
+    b.setAttribute('aria-label', `${d.getMonth() + 1}월 ${d.getDate()}일 열기`);
+    b.onclick = () => { if (!isWideSide()) setSide(false); openDay(ds); };
+    cells.push(b);
+    if (i === 34 && addDays(start, 35).getMonth() !== m.getMonth()) break;
+  }
+  box.replaceChildren(...cells);
+}
+function shiftMini(n) {
+  const m = miniState.month || state.month;
+  miniState.month = new Date(m.getFullYear(), m.getMonth() + n, 1);
+  renderMiniCal();
+}
+
 // 휴지통: 지운 탭을 30일 보관 (드라이브 trash.json으로 기기끼리 공유)
 const trash = Object.assign(syncedStore('trash.json', 'trash', 30), {
   add(date, page) { this.put(page.id, { date, page, at: Date.now() }); },
@@ -3774,6 +3860,7 @@ function closeTopLayer() {
   for (const id of ['#modal', '#search-ov', '#onboard']) {
     if (!$(id).classList.contains('hidden')) { $(id).classList.add('hidden'); return true; }
   }
+  if (state.view === 'month' && !isWideSide() && document.body.classList.contains('side-on')) { setSide(false); return true; }
   if (!$('#settings').classList.contains('hidden')) { $('#settings').classList.add('hidden'); $('#settings-btn').setAttribute('aria-expanded', 'false'); return true; }
   if (state.view === 'day' && isNarrow() && panelVisible()) { setPanel(false); return true; }
   if (state.view === 'day' && typeof lasso !== 'undefined' && lasso.sel.size) { lasso.clear(); return true; }
@@ -4249,6 +4336,20 @@ function bindPad() {
   });
   $('#gtasks-reauth').onclick = () => connect('').then(() => gtasks.run(true)).catch(handleErr);
   $('#settings-btn').addEventListener('click', renderTasksStatus);
+  $('#side-btn').onclick = () => setSide(!document.body.classList.contains('side-on'));
+  $('#side-backdrop').onclick = () => setSide(false);
+  $('#mini-prev').onclick = () => shiftMini(-1);
+  $('#mini-next').onclick = () => shiftMini(1);
+  $('#mini-title').onclick = () => {
+    const m = miniState.month;
+    if (state.calView !== 'month') setCalView('month');
+    state.month = new Date(m.getFullYear(), m.getMonth(), 1);
+    if (!isWideSide()) setSide(false);
+    renderMonth();
+  };
+  setSide(isWideSide() && store.get('sideOpen', true));
+  // 화면 폭이 바뀌면(폴드 접고 펴기·창 크기) 넓으면 기억한 대로, 좁으면 닫음
+  window.matchMedia('(min-width: 900px)').addEventListener('change', (e) => setSide(e.matches && store.get('sideOpen', true)));
   $('#todo-show-done').addEventListener('change', (e) => {
     todoState.showDone = e.target.checked;
     store.set('todoShowDone', todoState.showDone);

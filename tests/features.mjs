@@ -135,6 +135,15 @@ try {
   await p.click('#back-btn');
   await p.waitForTimeout(400);
   await p.click('[data-view=month] >> visible=true');
+  // 왼쪽 캘린더 목록: '메모 일정'을 끄면 달력에서 사라지고, 켜면 돌아옴
+  const chips = () => p.$$eval('.cell.today .chip:not(.spacer)', (x) => x.map((i) => i.textContent).join(' '));
+  check('왼쪽 캘린더 목록 창', (await p.isVisible('#cal-side')) && (await p.$$('.mini-day')).length >= 28);
+  await p.click('.cal-row >> text=메모 일정');
+  await p.waitForTimeout(200);
+  const off = await chips();
+  await p.click('.cal-row >> text=메모 일정');
+  await p.waitForTimeout(200);
+  check('캘린더 끄고 켜기', !off.includes('주간회의') && (await chips()).includes('주간회의'), off);
   check('달력 요약에 사진 설명', ((await p.textContent('.cell.today .digest')) || '').includes('화이트보드'));
   await ctx.close();
 } finally {

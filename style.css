@@ -748,3 +748,38 @@ body.in-day .fab { display: none; }
 .lock-key { height: 4.2rem; border-radius: 50%; border: 1px solid var(--line); background: var(--card); font-size: 1.4rem; }
 .lock-form { display: flex; flex-direction: column; gap: 8px; }
 .lock-form input, .modal-body > input { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--input); color: var(--text); font: inherit; }
+
+/* 캘린더 보이기 */
+.cal-filter { display: flex; flex-direction: column; }
+.cal-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; cursor: pointer; min-height: 2.4rem; }
+.cal-row input { width: 1.25rem; height: 1.25rem; accent-color: var(--c); flex-shrink: 0; }
+.cal-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.92rem; }
+.cal-group { font-size: 0.72rem; color: var(--muted); }
+
+/* ---------- 왼쪽 캘린더 목록 창 (네이버 캘린더처럼) */
+#month-view { flex-direction: row; gap: 10px; }
+.month-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.side-btn .ic { width: 1.25rem; height: 1.25rem; }
+.cal-side { display: none; flex-direction: column; gap: 10px; width: 228px; flex-shrink: 0; overflow-y: auto; padding: 6px 10px 6px 4px; border-right: 1px solid var(--line); }
+body.side-on .cal-side { display: flex; }
+.side-backdrop { display: none; }
+.mini-head { display: flex; align-items: center; justify-content: space-between; }
+.mini-title { border: 0; background: none; font-weight: 700; font-size: 1rem; padding: 4px 6px; }
+.mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; background: var(--soft, rgba(127,127,127,.07)); border-radius: 8px; padding: 4px; }
+.mini-dow { font-size: 0.72rem; color: var(--muted); padding: 3px 0; }
+.mini-day { border: 0; background: none; font-size: 0.78rem; padding: 0; min-height: 1.75rem; border-radius: 6px; }
+.mini-day:hover { background: var(--line); }
+.mini-day.other { opacity: .4; }
+.mini-dow.sun, .mini-day.sun { color: var(--sun); }
+.mini-dow.sat, .mini-day.sat { color: var(--sat); }
+.mini-day.today { outline: 1.5px solid var(--accent); font-weight: 700; }
+.cal-group-title { margin: 6px 0 2px; font-size: 0.85rem; font-weight: 700; }
+.cal-filter .cal-row { min-height: 2.1rem; padding: 3px 2px; }
+.cal-empty, .cal-hint { font-size: 0.75rem; color: var(--muted); margin: 0; padding: 2px; }
+/* 좁은 화면: 왼쪽에서 덮는 서랍 */
+@media (max-width: 899px) {
+  .cal-side { position: fixed; top: 0; bottom: 0; left: 0; z-index: 30; width: min(280px, 82vw); background: var(--card); border-right: 1px solid var(--line); box-shadow: 4px 0 20px rgba(0,0,0,.18); padding: calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 12px); }
+  body.side-on .side-backdrop { display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0,0,0,.3); }
+}
+body.in-day .cal-side, body.in-day .side-backdrop { display: none !important; }
+@media (pointer: coarse) { .mini-day { min-height: 2.2rem; } }

@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=33">
-<script src="config.js?v=33"></script>
+<link rel="stylesheet" href="style.css?v=35">
+<script src="config.js?v=35"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=33"></script>
-<script src="app.js?v=33" defer></script>
+<script src="vendor/perfect-freehand.js?v=35"></script>
+<script src="app.js?v=35" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -55,6 +55,7 @@
 
 <header class="topbar">
   <div id="month-nav" class="nav">
+    <button id="side-btn" class="arrow side-btn" aria-label="캘린더 목록 열고 닫기" aria-controls="cal-side" title="캘린더 목록"><svg class="ic"><use href="#i-list"/></svg></button>
     <button id="prev-month" class="arrow" aria-label="이전">‹</button>
     <h1 id="month-title"></h1>
     <button id="next-month" class="arrow" aria-label="다음">›</button>
@@ -143,6 +144,20 @@
 
 <main>
   <section id="month-view">
+    <aside id="cal-side" class="cal-side" aria-label="캘린더 목록">
+      <div class="mini-cal">
+        <div class="mini-head">
+          <button id="mini-prev" class="arrow" aria-label="이전 달">‹</button>
+          <button id="mini-title" class="mini-title" title="이 달 보기"></button>
+          <button id="mini-next" class="arrow" aria-label="다음 달">›</button>
+        </div>
+        <div id="mini-grid" class="mini-grid"></div>
+      </div>
+      <div id="cal-filter" class="cal-filter"></div>
+      <p class="cal-hint">네이버 캘린더는 한 번 불러오면 목록에 나타나요. 끄고 켠 설정은 다른 기기와 같이 써요.</p>
+    </aside>
+    <div id="side-backdrop" class="side-backdrop"></div>
+    <div class="month-main">
     <div class="weekdays">
       <div class="sun">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div class="sat">토</div>
     </div>
@@ -164,6 +179,7 @@
       </div>
       <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터) · '금요일까지 보고서'처럼 쓰면 기한 인식" aria-label="오늘 할 일 추가" enterkeyhint="done">
       <div id="todo-items"></div>
+    </div>
     </div>
     <button id="fab" class="fab" aria-label="오늘 메모 쓰기 (길게 누르면 종류 선택)" title="오늘 메모 쓰기"><svg class="ic"><use href="#i-plus"/></svg></button>
   </section>

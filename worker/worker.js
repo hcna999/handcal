@@ -445,7 +445,8 @@ async function naverEvents(env, startIso, endIso, noCache) {
       warnings.push(`${cal.name}: ${e.message}`);
     }
   }));
-  const data = { events, warnings, stats };
+  // 캘린더 목록도 함께 (앱에서 캘린더별로 켜고 끄기)
+  const data = { events, warnings, stats, calendars: cals.map((c) => ({ name: c.name, color: c.color })) };
   if (events.length && eventCache.size > 30) eventCache.clear();
   if (events.length || warnings.length === 0) eventCache.set(key, { at: Date.now(), data });
   return data;

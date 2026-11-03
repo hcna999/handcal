@@ -68,6 +68,7 @@
 | `events.json` | 앱에서 적는 "메모 일정" | id별 `updated`가 최신인 쪽 |
 | `digests.json` | 달력 칸 한 줄 요약 `{날짜: {text, todos, at}}` | 날짜별 `at`이 최신인 쪽 |
 | `index.json` | 날짜별 색인 `{날짜: {p: 미리보기[{kind,text,ink}], todos, u, t}}` — 목록·검색·할 일을 문서를 다 읽지 않고 그림 | 항목별 `t` 최신 (`noteIndex`) |
+| `prefs.json` | 기기끼리 같이 쓰는 설정. 지금은 `hiddenCals: {list: [끈 캘린더 이름…]}` | 항목별 `t` 최신 (`syncedStore`) |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
 
 - 드라이브 권한은 `drive.file`이라 **앱이 만든 파일만** 볼 수 있다.
@@ -75,11 +76,13 @@
 ### 기기 저장
 
 - IndexedDB `handcal` / store `kv`에 키 `note:YYYY-MM-DD`로 하루 메모를 보관한다(드라이브 사본).
-- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2` …)이 있다.
+- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2`, `sideOpen` …), `naverCals`(마지막으로 받은 네이버 캘린더 이름·색 목록)가 있다.
 
 ## 화면 구성 (요약)
 
 - 상단: 달력/하루 이동, 검색(돋보기), 설정(톱니바퀴 + 동기화 상태 점). 로그인·동기화 버튼은 설정 안 "계정" 칸에 있다.
+- 왼쪽 캘린더 목록 창(`#cal-side`, 상단 ☰ `#side-btn`): 작은 달력(`renderMiniCal`, 날짜 누르면 그날 열기, 제목 누르면 그 달로) + 캘린더별 보이기 체크(`renderCalFilter`). 900px 이상은 옆에 붙고 열림 여부를 `sideOpen`에 기억, 좁으면 왼쪽 서랍으로 덮는다.
+- 캘린더 끄고 켜기: 일정마다 `calKey(ev)`(네이버 캘린더 이름 / `메모 일정` / `공휴일`)로 묶고, `prefs`의 `hiddenCals`에 든 것은 `events.on`·`holidayOn`·검색에서 뺀다. 네이버 목록은 Worker `/naver/events` 응답의 `calendars`에서 온다.
 - 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
 - 하루 화면: 탭 줄 → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`). 일정은 상단 "일정" 버튼의 시트/패널.
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
@@ -105,7 +108,7 @@
 |---|---|
 | `POST /auth/exchange` | 구글 인증 코드 → 토큰 (클라이언트 보안 비밀번호는 서버에만) |
 | `POST /auth/refresh` | 리프레시 토큰으로 새 액세스 토큰 |
-| `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용 |
+| `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용. 응답 `{events, calendars:[{name,color}], warnings, stats}` |
 | `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`) |
 | `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
