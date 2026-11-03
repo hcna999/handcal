@@ -118,8 +118,11 @@ try {
   await p.click('#zoom-in');
   await p.click('[data-tool=pen]');
   const B2 = await p.$eval('#canvas', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, s: r.width / 1000 }; });
-  await p.mouse.move(B2.x + 100 * B2.s, B2.y + 600 * B2.s); await p.mouse.down(); await p.mouse.move(B2.x + 200 * B2.s, B2.y + 600 * B2.s, { steps: 4 }); await p.mouse.up();
-  check('150% 확대에서도 좌표 정확', JSON.stringify(await p.evaluate(() => pad.note.strokes.at(-1).points[0].slice(0, 2).map(Math.round))) === '[100,600]');
+  // 화면에 보이는 자리(600, 500)에 그리고, 저장된 좌표가 그 자리의 종이 좌표와 같은지
+  const want = [Math.round((600 - B2.x) / B2.s), Math.round((500 - B2.y) / B2.s)];
+  await p.mouse.move(600, 500); await p.mouse.down(); await p.mouse.move(680, 500, { steps: 4 }); await p.mouse.up();
+  const got = await p.evaluate(() => pad.note.strokes.at(-1).points[0].slice(0, 2).map(Math.round));
+  check('150% 확대에서도 좌표 정확', Math.abs(got[0] - want[0]) <= 1 && Math.abs(got[1] - want[1]) <= 1, `${got} ≈ ${want}`);
   await p.click('#zoom-label');
 
   // 사진 탭: 넣으면 줄여서 저장, 달력 요약에 사진 설명

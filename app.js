@@ -2730,7 +2730,8 @@ const autoOcr = {
 function renderOcr() {
   const o = pad.note.ocr;
   // 손글씨 탭에 필기가 있을 때만 위에 한 줄 카드로 (펼치면 원문 편집)
-  const show = !pad.note.kind && pad.note.strokes.length > 0;
+  // 손글씨 탭이면 처음부터 보여줌 (쓰는 도중에 카드가 생겨 필기장이 밀려 내려가지 않게)
+  const show = !pad.note.kind;
   $('#ocr-panel').classList.toggle('hidden', !show);
   const openCard = store.get('ocrOpen', false);
   $('#ocr-body').classList.toggle('hidden', !openCard);
@@ -2738,6 +2739,7 @@ function renderOcr() {
   $('#ocr-more').textContent = openCard ? '접기' : '자세히';
   $('#ocr-line').textContent = o
     ? (needsOcr(pad.note) ? '(고친 필기는 잠시 뒤 다시 변환) ' : '') + (firstLine(o.text) || '(글자 없음)')
+    : !pad.note.strokes.length ? '손글씨를 쓰면 잠시 뒤 자동으로 글자로 바뀌어요'
     : !CFG.WORKER_URL ? '글자 변환은 중계 서버를 연결하면 쓸 수 있어요'
     : '손글씨 → 글자 변환 대기 중…';
   $('#ocr-btn').textContent = o ? '다시 변환' : '지금 변환';
