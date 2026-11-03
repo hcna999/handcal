@@ -3285,7 +3285,9 @@ window.argonRefine = {
     const items = [];
     for (const date of dates) {
       const doc = state.date === date && state.view === 'day' ? pad.doc : await notes.get(date);
-      const dayEvents = (events.forDay(parseYmd(date)) || []).map((e) => e.title);
+      const dayObj = parseYmd(date);
+      const cachedEvs = events.cached(dayObj, addDays(dayObj, 1)) || [];
+      const dayEvents = events.on(cachedEvs, dayObj).map((e) => e.title);
       const otherText = doc.pages
         .filter((p) => p.kind === 'text' && p.text?.trim())
         .map((p) => p.text.trim().slice(0, 200));
@@ -3358,7 +3360,7 @@ window.argonRefine = {
     };
     delete page.ocr.userEdited;
     if (isCurrent) {
-      await saveNow();
+      await notes.put(date, cloneDoc(pad.doc));
       renderOcr();
       renderTabs();
     } else {
