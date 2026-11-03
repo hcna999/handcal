@@ -145,6 +145,51 @@ try {
   await p.waitForTimeout(200);
   check('캘린더 끄고 켜기', !off.includes('주간회의') && (await chips()).includes('주간회의'), off);
   check('달력 요약에 사진 설명', ((await p.textContent('.cell.today .digest')) || '').includes('화이트보드'));
+
+  // 6-1 달력 제목 눌러 날짜 바로 이동
+  await p.click('#month-title');
+  await p.waitForTimeout(200);
+  check('날짜 바로 이동 창 열기', (await p.isVisible('#modal')) && (await p.$$('.jump-months button')).length === 12);
+  await p.click('#modal-close');
+  await p.waitForTimeout(100);
+
+  // 6-2 메모 일정 수정 & 6-3 탭 이름 바꾸기·순서 이동
+  await p.click('.cell.today');
+  await p.waitForTimeout(400);
+  await p.click('#panel-toggle');
+  await p.waitForTimeout(200);
+  await p.click('#event-list li.editable');
+  await p.waitForTimeout(150);
+  check('메모 일정 수정 모드', (await p.textContent('#ev-submit')) === '저장' && (await p.inputValue('#ev-title')) === '주간회의');
+  await p.fill('#ev-title', '주간회의(수정)');
+  await p.click('#ev-submit');
+  await p.waitForTimeout(300);
+  const editedTitle = await p.textContent('#event-list .ev-title');
+  check('메모 일정 수정 반영', editedTitle === '주간회의(수정)', editedTitle);
+
+  await p.evaluate(() => { pad.doc.pages[0].title = '중요메모'; renderTabs(); saveSoon(); });
+  const tabName = await p.textContent('.page-tab .page-tab-label');
+  check('탭 이름 직접 지정', tabName === '중요메모', tabName);
+
+  // 6-4 주간 보기 지금 시각 줄 & 완료한 할 일 정리 & 개인 용어집
+  await p.click('#back-btn');
+  await p.waitForTimeout(300);
+  await p.click('[data-view=week] >> visible=true');
+  await p.waitForTimeout(200);
+  check('주간 보기 지금 시각 줄', (await p.$$('.wtime-now')).length === 1);
+
+  await p.click('#settings-btn');
+  await p.waitForTimeout(200);
+  const storageTxt = await p.textContent('#storage-info');
+  check('설정 저장 용량 안내', storageTxt.includes('저장된 메모'), storageTxt);
+  await p.click('#open-glossary');
+  await p.waitForTimeout(200);
+  await p.fill('#modal-body input', '홍길동, AI프로젝트');
+  await p.click('#modal-body button[type=submit]');
+  await p.waitForTimeout(200);
+  const glossWords = await p.evaluate(() => glossary.words());
+  check('개인 용어집 추가', glossWords.includes('홍길동') && glossWords.includes('AI프로젝트'), glossWords.join(','));
+  await p.click('#modal-close');
   await ctx.close();
 } finally {
   await browser.close();

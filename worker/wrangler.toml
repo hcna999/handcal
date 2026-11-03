@@ -5,3 +5,13 @@ compatibility_date = "2025-09-01"
 workers_dev = true
 # 대시보드에서 넣은 변수(ALLOWED_ORIGIN 등)를 배포할 때 지우지 않음. 비밀값은 원래 유지됨
 keep_vars = true
+
+# 매일 03:00 KST(= 18:00 UTC)에 최근 손글씨 초벌을 유료 모델로 다듬기 (토큰이 등록된 경우에만 동작)
+[triggers]
+crons = ["0 18 * * *"]
+
+# (선택) 대시보드에서 KV 네임스페이스를 만들고 HANDCAL_KV로 바인딩하면 리프레시 토큰·캘린더 목록을 영구 보관함
+# [[kv_namespaces]]
+# binding = "HANDCAL_KV"
+# id = "..."
+

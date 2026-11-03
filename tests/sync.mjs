@@ -165,6 +165,27 @@ try {
       if (r.request().method() === 'OPTIONS') return r.fulfill({ headers: H });
       calls++;
       const u = new URL(r.request().url());
+      if (u.pathname === '/ocr') {
+        return r.fulfill({ headers: H, contentType: 'application/json', body: JSON.stringify({
+          text: '금요일까지 견적서 보냄',
+          summary: '견적서 발송',
+          todos: ['금요일까지 견적서 보냄'],
+          decisions: [],
+          model: 'gemini-2.5-flash',
+        }) });
+      }
+      if (u.pathname === '/refine/run') {
+        return r.fulfill({ headers: H, contentType: 'application/json', body: JSON.stringify({
+          text: '금요일까지 견적서 보내기 (홍길동)',
+          summary: '홍길동 견적서 발송',
+          todos: ['금요일까지 견적서 보내기'],
+          decisions: [],
+          todoMap: [{ from: '금요일까지 견적서 보냄', to: '금요일까지 견적서 보내기' }],
+          newGlossary: ['홍길동'],
+          changes: ["'보냄' → '보내기'"],
+          model: 'gemini-2.5-pro',
+        }) });
+      }
       const evs = [];
       for (let d = new Date(u.searchParams.get('start')); d < new Date(u.searchParams.get('end')); d.setDate(d.getDate() + 1)) {
         if (d.getDate() !== 15) continue;
@@ -197,6 +218,39 @@ try {
     await p.waitForSelector('.cell');
     await p.waitForTimeout(300);
     check('다시 열면 저장해 둔 일정이 바로 보임', (await chips()) > 0);
+
+    // 손글씨 초벌 변환 시 드라이브 ink/ PNG 저장 + 유료 모델 다듬기 + 초벌 되돌리기
+    await p.click('.cell.today');
+    await p.waitForTimeout(400);
+    await p.evaluate(() => addPage('ink'));
+    await p.waitForTimeout(200);
+    await p.evaluate(() => {
+      pad.note.strokes.push({ tool: 'pen', color: '#111827', size: 3.2, points: [[100, 120, 0.5], [220, 120, 0.5]] });
+      redraw();
+    });
+    await p.click('#ocr-head');
+    await p.click('#ocr-btn');
+    await p.waitForTimeout(600);
+    const draftState = await p.evaluate(() => ({ quality: pad.note.ocr?.quality, hasImg: !!pad.note.ocr?.imageId, text: pad.note.ocr?.text }));
+    check('초벌 변환 시 PNG 업로드·draft 기록', draftState.quality === 'draft' && draftState.hasImg && draftState.text.includes('견적서 보냄'));
+
+    // 할 일 완료 표시 후 AI 다듬기 → todoMap으로 완료 여부 보존 + 용어집 자동 추가
+    await p.evaluate(() => { pad.note.ocr.done = [true]; });
+    await p.click('#ocr-refine-btn');
+    await p.waitForTimeout(600);
+    const refinedState = await p.evaluate(() => ({
+      quality: pad.note.ocr?.quality,
+      done: pad.note.ocr?.done?.[0],
+      draftText: pad.note.ocr?.draft?.text,
+      hasBadge: !!document.querySelector('.ocr-badge'),
+      gloss: glossary.words(),
+    }));
+    check('AI 다듬기(배지·초벌 백업·할 일 완료 보존·용어집 수집)', refinedState.quality === 'refined' && refinedState.done === true && refinedState.draftText === '금요일까지 견적서 보냄' && refinedState.hasBadge && refinedState.gloss.includes('홍길동'));
+
+    await p.click('#ocr-revert-btn');
+    await p.waitForTimeout(200);
+    const reverted = await p.evaluate(() => ({ text: pad.note.ocr?.text, userEdited: pad.note.ocr?.userEdited }));
+    check('초벌로 되돌리기(userEdited 표시)', reverted.text === '금요일까지 견적서 보냄' && reverted.userEdited === true);
     await ctx.close();
   }
 } finally {

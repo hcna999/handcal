@@ -19,20 +19,20 @@
 | 파일 | 내용 |
 |---|---|
 | `index.html` | 화면 뼈대. 스크립트/CSS 주소 끝의 `?v=NN`은 캐시를 깨는 버전 |
-| `app.js` | 앱 전체 로직 (약 2700줄, `// ---------- 제목` 주석으로 구역이 나뉨) |
+| `app.js` | 앱 전체 로직 (약 5100줄, `// ---------- 제목` 주석으로 구역이 나뉨) |
 | `style.css` | 스타일. 색은 `:root` 변수, 다크 모드는 `prefers-color-scheme` + `data-theme` |
 | `config.js` | 공개 설정: `GOOGLE_CLIENT_ID`, `WORKER_URL` (비밀값 아님) |
 | `sw.js` | 서비스 워커(오프라인 캐시, 네트워크 우선). `CACHE = 'handcal-vNN'` |
-| `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, 손글씨 OCR(Gemini) |
-| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`: 대시보드 변수를 지우지 않음) |
+| `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, 손글씨 OCR(Gemini) 및 주기적 정밀 다듬기(Cron + `/refine/*`) |
+| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = ["0 18 * * *"]`) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
-| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표 |
-| `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금 (가짜 드라이브) |
+| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집 |
+| `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금, 손글씨 PNG 업로드·AI 다듬기 (가짜 드라이브) |
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
-| `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
-| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~4단계, 우선순위순) |
+| `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~6단계 완료) |
 
 ## app.js 구역
 
@@ -70,6 +70,9 @@
 | `index.json` | 날짜별 색인 `{날짜: {p: 미리보기[{kind,text,ink}], todos, u, t}}` — 목록·검색·할 일을 문서를 다 읽지 않고 그림 | 항목별 `t` 최신 (`noteIndex`) |
 | `prefs.json` | 기기끼리 같이 쓰는 설정. 지금은 `hiddenCals: {list: [끈 캘린더 이름…]}` | 항목별 `t` 최신 (`syncedStore`) |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
+| `glossary.json` | 개인 용어집 `{단어: {src: 'user'\|'auto', t}}` — 손글씨 OCR·정밀 다듬기 프롬프트에 힌트로 전달 | 항목별 `t` 최신 (`syncedStore`) |
+| `refine-log.json` | 유료 모델 정밀 다듬기 실행 내역 및 월별 비용 `{runs:[…], monthly:{YYYY-MM:{usd,pages}}}` | 서버/앱이 최신 기록 추가 |
+| `ink/YYYY-MM-DD_탭id.png` | 손글씨 초벌 변환 때 함께 올리는 PNG(`ocr.imageId`). 서버가 주기적으로 유료 모델로 다듬을 때 사용 | 같은 탭 다시 변환 시 덮어쓰기 |
 
 - 드라이브 권한은 `drive.file`이라 **앱이 만든 파일만** 볼 수 있다.
 
@@ -80,12 +83,13 @@
 
 ## 화면 구성 (요약)
 
-- 상단: 달력/하루 이동, 검색(돋보기), 설정(톱니바퀴 + 동기화 상태 점). 로그인·동기화 버튼은 설정 안 "계정" 칸에 있다.
+- 상단: 달력/하루 이동(제목 `#month-title`·`#day-title`을 누르면 연·월·날짜 바로 이동 창 `openDateJump`), 검색(돋보기), 설정(톱니바퀴 + 동기화 상태 점). 로그인·동기화 버튼은 설정 안 "계정" 칸에 있다.
 - 왼쪽 캘린더 목록 창(`#cal-side`, 상단 ☰ `#side-btn`): 작은 달력(`renderMiniCal`, 날짜 누르면 그날 열기, 제목 누르면 그 달로) + 캘린더별 보이기 체크(`renderCalFilter`). 900px 이상은 옆에 붙고 열림 여부를 `sideOpen`에 기억, 좁으면 왼쪽 서랍으로 덮는다.
-- 일정 불러오기(`events`): 네이버 일정은 달 단위로 받은 시각을 기억해 `naverEvents`에 저장한다. `events.cached(s,e)`는 받아 둔 게 있으면(오래돼도) 바로 돌려주고, `events.fresh()`가 거짓(5분 지남)이면 화면을 먼저 그린 뒤 뒤에서 `events.load()`로 새로 받아 **바뀐 경우만**(`events.version`) 다시 그린다. 받을 때는 모자란 달 + 앞뒤 한 달을 한 번에(최대 12개월), 달력·주간을 그린 뒤 `events.prefetch()`로 앞뒤 화면 것도 미리 받는다. 같은 기간 요청은 하나로 묶고(`inflight`), 실패하면 30초 뒤 다시 시도. 앱으로 돌아오면 `events.clear()`는 지우지 않고 '오래됨'으로만 표시한다. 메모 일정은 늘 `memos`에서 바로 계산.
+- 일정 불러오기(`events`): 네이버 일정은 달 단위로 받은 시각을 기억해 `naverEvents`에 저장한다. `events.cached(s,e)`는 받아 둔 게 있으면(오래돼도) 바로 돌려주고, `events.fresh()`가 거짓(5분 지남)이면 화면을 먼저 그린 뒤 뒤에서 `events.load()`로 새로 받아 **바뀐 경우만**(`events.version`) 다시 그린다. 받을 때는 모자란 달 + 앞뒤 한 달을 한 번에(최대 12개월), 달력·주간을 그린 뒤 `events.prefetch()`로 앞뒤 화면 것도 미리 받는다. 같은 기간 요청은 하나로 묶고(`inflight`), 실패하면 30초 뒤 다시 시도. 앱으로 돌아오면 `events.clear()`는 지우지 않고 '오래됨'으로만 표시한다. 메모 일정은 늘 `memos`에서 바로 계산하며, 하루 화면에서 기존 메모 일정을 눌러 제목·시간·종료일(여러 날 종일 일정)을 고칠 수 있다(`startEditEvent`, `memos.update`).
 - 캘린더 끄고 켜기: 일정마다 `calKey(ev)`(네이버 캘린더 이름 / `메모 일정` / `공휴일`)로 묶고, `prefs`의 `hiddenCals`에 든 것은 `events.on`·`holidayOn`·검색에서 뺀다. 네이버 목록은 Worker `/naver/events` 응답의 `calendars`에서 온다.
 - 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
-- 하루 화면: 탭 줄 → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`). 일정은 상단 "일정" 버튼의 시트/패널.
+- 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). 일정은 상단 "일정" 버튼의 시트/패널.
+- 주간 보기에는 오늘 칸에 현재 시각 빨간 줄(`.wtime-now`)이 표시되고, 할 일 모아보기에서 '완료 보기'를 켜면 완료된 할 일을 한 번에 정리(`#todo-clear-done`, `clearDoneTodos`)할 수 있다.
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
 - 아직 만들지 않은 기능의 버튼은 `data-soon` 속성으로 숨긴다(완성하면 속성을 지운다).
 
@@ -110,12 +114,15 @@
 | `POST /auth/exchange` | 구글 인증 코드 → 토큰 (클라이언트 보안 비밀번호는 서버에만) |
 | `POST /auth/refresh` | 리프레시 토큰으로 새 액세스 토큰 |
 | `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용. 응답 `{events, calendars:[{name,color}], warnings, stats}` |
-| `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`) |
+| `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`, 개인 용어집 `glossary` 포함) |
 | `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
+| `POST /refine/register` | 주기적 다듬기용 구글 리프레시 토큰을 AES-GCM 암호화해 KV(또는 메모리)에 저장 |
+| `GET /refine/status` | 토큰 등록 여부·이번 달 추정 비용·마지막 실행 결과 확인 |
+| `POST /refine/run` | 단일 탭 즉시 다듬기(`image`+`draft` 전달) 또는 드라이브 일괄 스캔 다듬기(`?dry=1` 지원). `scheduled()` 크론도 같은 로직 사용 |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
 
 - 구글 토큰과 `OWNER_EMAIL`로 주인만 쓸 수 있다.
-- 환경 변수는 Cloudflare 대시보드에 있다: `ALLOWED_ORIGIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OWNER_EMAIL`, `NAVER_ID`, `NAVER_APP_PASSWORD`, `GEMINI_API_KEY`, (선택) `GEMINI_MODEL`, `GEMINI_TIMEOUT_MS`, `NAVER_CALDAV_URL`, `TIMEZONE`, `CALENDAR_COLORS`.
+- 환경 변수는 Cloudflare 대시보드에 있다: `ALLOWED_ORIGIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OWNER_EMAIL`, `NAVER_ID`, `NAVER_APP_PASSWORD`, `GEMINI_API_KEY`, (선택) `GEMINI_MODEL`, `GEMINI_TIMEOUT_MS`, `GEMINI_PAID_API_KEY`, `GEMINI_REFINE_MODEL`, `REFINE_MONTHLY_BUDGET_USD`, `REFINE_MAX_PAGES_PER_RUN`, `TOKEN_ENC_KEY`, `HANDCAL_KV`, `NAVER_CALDAV_URL`, `TIMEZONE`, `CALENDAR_COLORS`.
 
 ## 배포
 

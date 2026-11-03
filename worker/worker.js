@@ -48,6 +48,16 @@ export default {
       } else if (url.pathname === '/transcribe' && req.method === 'POST') {
         await requireOwner(req, env);
         body = await transcribe(env, await req.json());
+      } else if (url.pathname === '/refine/register' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await refineRegister(env, await req.json());
+      } else if (url.pathname === '/refine/status' && req.method === 'GET') {
+        await requireOwner(req, env);
+        body = await refineStatus(req, env);
+      } else if (url.pathname === '/refine/run' && req.method === 'POST') {
+        await requireOwner(req, env);
+        const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+        body = await refineRun(env, { dry: url.searchParams.get('dry') === '1', token, body: await req.json().catch(() => ({})) });
       } else if (url.pathname === '/') {
         body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: !!env.GEMINI_API_KEY };
       } else return json({ error: 'not_found' }, 404, cors);
@@ -55,6 +65,9 @@ export default {
     } catch (e) {
       return json({ error: e.code || 'error', message: String(e.message || e) }, e.status || 500, cors);
     }
+  },
+  scheduled(event, env, ctx) {
+    ctx.waitUntil(refineRun(env, { dry: false, scheduled: true }).catch((e) => console.error('refine cron:', e.message)));
   },
 };
 
@@ -191,7 +204,10 @@ const toList = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
 async function ocr(env, body) {
   const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
   if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
-  const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
+  const terms = Array.isArray(body.glossary) ? body.glossary.map(String).filter(Boolean).slice(0, 80) : [];
+  const prompt = OCR_PROMPT
+    + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '')
+    + (terms.length ? `\n(자주 쓰는 고유명사·용어집 — 이 표기를 우선 따를 것: ${terms.join(', ')})` : '');
   const { out, model, tried } = await geminiJson(env, [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }], OCR_SCHEMA);
   return { text: String(out.text || ''), summary: String(out.summary || ''), todos: toList(out.todos), decisions: toList(out.decisions), model, tried };
 }
@@ -275,8 +291,30 @@ function colorOverrides(env) {
 }
 
 let calCache = null;
+const calCacheReq = (env) => new Request(`https://handcal-internal.local/naver-cals-${encodeURIComponent(env.NAVER_ID || 'default')}`);
+async function clearCalCache(env) {
+  calCache = null;
+  try { await caches?.default?.delete(calCacheReq(env)); } catch {}
+}
 async function calendars(env) {
   if (calCache && Date.now() - calCache.at < 3600e3) return calCache.cals;
+  try {
+    if (env.HANDCAL_KV) {
+      const kv = await env.HANDCAL_KV.get('naver_cals', 'json');
+      if (kv?.cals?.length && Date.now() - (kv.at || 0) < 6 * 3600e3) {
+        calCache = { at: Date.now(), cals: kv.cals };
+        return kv.cals;
+      }
+    }
+    const hit = await caches?.default?.match(calCacheReq(env));
+    if (hit) {
+      const cals = await hit.json();
+      if (Array.isArray(cals) && cals.length) {
+        calCache = { at: Date.now(), cals };
+        return cals;
+      }
+    }
+  } catch {}
   const base = davBase(env);
   const abs = (h) => new URL(h, base + '/').toString();
 
@@ -312,11 +350,17 @@ async function calendars(env) {
     });
   }
   calCache = { at: Date.now(), cals };
+  try {
+    if (cals.length) {
+      await caches?.default?.put(calCacheReq(env), new Response(JSON.stringify(cals), { headers: { 'Cache-Control': 'max-age=21600' } }));
+      if (env.HANDCAL_KV) await env.HANDCAL_KV.put('naver_cals', JSON.stringify({ at: Date.now(), cals }), { expirationTtl: 86400 });
+    }
+  } catch {}
   return cals;
 }
 
 async function naverTest(env) {
-  calCache = null;
+  await clearCalCache(env);
   const cals = await calendars(env);
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -327,7 +371,7 @@ async function naverTest(env) {
 
 // 진단용: 첫 캘린더의 이번 달 REPORT 원본 응답 일부 (일정 제목 등 개인 내용이 보일 수 있음)
 async function naverDebug(env) {
-  calCache = null;
+  await clearCalCache(env);
   const cals = await calendars(env);
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -664,6 +708,343 @@ function expandEvents(vevents, cal, fromMs, toMs, tz) {
     }
   }
   return out;
+}
+
+// ---------- 손글씨 유료 모델 다듬기 (PLAN-ocr-refine)
+const REFINE_PROMPT = `당신은 한국어 손글씨 메모를 판독·교정하는 편집자입니다.
+첨부된 이미지는 태블릿에 손으로 쓴 메모이고, [초벌]은 빠른 무료 모델이 먼저 읽은 결과입니다.
+1) 이미지를 직접 다시 읽고, 초벌에서 잘못 읽은 글자를 고치세요 (예: 흘림체 오독 교정).
+2) 문맥상 말이 되게 다듬되, 이미지에 없는 내용을 추가하거나 의미를 바꾸지 마세요.
+3) 확신이 없는 글자는 [?]를 붙여 남기세요. 그림·도형은 [그림: 짧은 설명]으로 둡니다.
+4) [용어집]의 고유명사 표기를 우선 따르세요. 날짜·일정은 [문맥]을 참고만 하세요.
+5) 할 일(todos) 문구가 바뀌었다면 todoMap에 {from: 기존 초벌 할 일, to: 다듬은 할 일}로 짝지어 주세요.
+6) 새로 발견한 사람 이름·부서·프로젝트·약어 등 고유명사는 properNouns에 넣어 주세요.`;
+
+const REFINE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    text: { type: 'STRING' },
+    summary: { type: 'STRING' },
+    todos: { type: 'ARRAY', items: { type: 'STRING' } },
+    decisions: { type: 'ARRAY', items: { type: 'STRING' } },
+    changes: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { from: { type: 'STRING' }, to: { type: 'STRING' }, reason: { type: 'STRING' } },
+        required: ['from', 'to'],
+      },
+    },
+    properNouns: { type: 'ARRAY', items: { type: 'STRING' } },
+    todoMap: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { from: { type: 'STRING' }, to: { type: 'STRING' } },
+        required: ['from', 'to'],
+      },
+    },
+  },
+  required: ['text', 'summary', 'todos', 'decisions', 'changes', 'properNouns', 'todoMap'],
+};
+
+const memKv = new Map();
+async function kvKey(env) {
+  const secret = env.GOOGLE_CLIENT_SECRET || env.GEMINI_API_KEY || 'handcal-default-key';
+  const raw = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+async function saveRefreshToken(env, token) {
+  memKv.set('refresh_token', token);
+  if (!env.HANDCAL_KV) return 'memory';
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await kvKey(env), new TextEncoder().encode(token)));
+  const b64 = (u8) => btoa(String.fromCharCode(...u8));
+  await env.HANDCAL_KV.put('refresh_token', JSON.stringify({ iv: b64(iv), data: b64(enc), at: Date.now() }));
+  return 'kv';
+}
+async function loadRefreshToken(env) {
+  if (env.HANDCAL_KV) {
+    const raw = await env.HANDCAL_KV.get('refresh_token', 'json').catch(() => null);
+    if (raw?.iv && raw?.data) {
+      try {
+        const u8 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u8(raw.iv) }, await kvKey(env), u8(raw.data));
+        return new TextDecoder().decode(dec);
+      } catch {}
+    }
+  }
+  return memKv.get('refresh_token') || null;
+}
+
+async function refineRegister(env, body) {
+  const rt = String(body?.refresh_token || '').trim();
+  if (!rt) throw httpError(400, 'no_refresh_token', '리프레시 토큰이 없어요');
+  const storage = await saveRefreshToken(env, rt);
+  return { ok: true, storage };
+}
+
+async function refineStatus(req, env) {
+  const rt = await loadRefreshToken(env);
+  let token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (rt) {
+    try { token = (await refresh(env, { refresh_token: rt })).access_token; } catch {}
+  }
+  let driveOk = false;
+  if (token) {
+    const r = await fetch('https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)', {
+      headers: { Authorization: 'Bearer ' + token },
+    }).catch(() => null);
+    driveOk = !!r?.ok;
+  }
+  return {
+    registered: !!rt,
+    kvBound: !!env.HANDCAL_KV,
+    driveOk,
+    model: env.REFINE_MODEL || 'gemini-2.5-pro',
+    maxPages: Number(env.REFINE_MAX_PAGES_PER_RUN) || 20,
+    monthlyBudgetUsd: Number(env.REFINE_MONTHLY_BUDGET_USD) || 5,
+    daysBack: Number(env.REFINE_DAYS_BACK) || 14,
+  };
+}
+
+async function refineOne(env, { image, draft, date, events, otherText, glossary }) {
+  if (!env.GEMINI_API_KEY) throw httpError(500, 'gemini_not_configured', '서버에 GEMINI_API_KEY가 설정되지 않았어요');
+  const img = String(image || '').replace(/^data:image\/\w+;base64,/, '');
+  if (!img) throw httpError(400, 'bad_image', '손글씨 이미지가 없어요');
+  const ctxLines = [
+    REFINE_PROMPT,
+    date ? `[날짜] ${date}` : '',
+    Array.isArray(events) && events.length ? `[그날 일정] ${events.join(', ')}` : '',
+    otherText ? `[같은 날 다른 탭 메모] ${String(otherText).slice(0, 600)}` : '',
+    Array.isArray(glossary) && glossary.length ? `[용어집] ${glossary.slice(0, 120).join(', ')}` : '',
+    `[초벌 글자]\n${String(draft?.text || '')}`,
+    draft?.todos?.length ? `[초벌 할 일]\n${draft.todos.join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const models = [...new Set([env.REFINE_MODEL, 'gemini-2.5-pro', 'gemini-2.5-flash'].filter(Boolean))];
+  let lastErr = null;
+  for (const model of models) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: ctxLines }, { inline_data: { mime_type: 'image/png', data: img } }] }],
+        generationConfig: { temperature: 0.15, responseMimeType: 'application/json', responseSchema: REFINE_SCHEMA },
+      }),
+      signal: AbortSignal.timeout(45000),
+    }).catch((e) => { lastErr = e; return null; });
+    if (!r) continue;
+    const data = await r.json().catch(() => ({}));
+    if ([404, 429, 500, 503].includes(r.status)) { lastErr = new Error(data.error?.message || `HTTP ${r.status}`); continue; }
+    if (!r.ok) throw httpError(502, 'gemini_error', data.error?.message || `HTTP ${r.status}`);
+    const raw = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+    const out = JSON.parse(raw || '{}');
+    const u = data.usageMetadata || {};
+    const inTok = Number(u.promptTokenCount) || 1500;
+    const outTok = Number(u.candidatesTokenCount) || 400;
+    // 대략적인 비용 추정 (Pro 기준 입력 $1.25/1M, 출력 $10/1M)
+    const costUsd = Math.round(((inTok * 1.25 + outTok * 10) / 1e6) * 10000) / 10000;
+    return {
+      text: String(out.text || draft?.text || ''),
+      summary: String(out.summary || ''),
+      todos: toList(out.todos),
+      decisions: toList(out.decisions),
+      changes: Array.isArray(out.changes) ? out.changes.slice(0, 20) : [],
+      properNouns: toList(out.properNouns).slice(0, 30),
+      todoMap: Array.isArray(out.todoMap) ? out.todoMap : [],
+      model,
+      tokens: inTok + outTok,
+      costUsd,
+    };
+  }
+  throw httpError(503, 'refine_failed', lastErr?.message || '다듬기 모델을 호출하지 못했어요');
+}
+
+const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
+const DRIVE_UP = 'https://www.googleapis.com/upload/drive/v3/files';
+const strHash36 = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+
+async function dFetch(token, url, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw httpError(r.status, 'drive_error', `Drive ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  return r;
+}
+async function dJson(token, url, opts) { return (await dFetch(token, url, opts)).json(); }
+async function dSaveJson(token, folderId, existingId, name, payload) {
+  if (existingId) {
+    return dJson(token, `${DRIVE_UP}/${existingId}?uploadType=media&fields=id,modifiedTime`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  }
+  const b = 'hc' + Math.random().toString(36).slice(2);
+  const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [folderId], mimeType: 'application/json' })}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(payload)}\r\n--${b}--`;
+  return dJson(token, `${DRIVE_UP}?uploadType=multipart&fields=id,modifiedTime`, {
+    method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body,
+  });
+}
+
+async function refineRun(env, { dry = false, scheduled = false, token: reqToken = '', body = {} } = {}) {
+  // 1) 앱에서 현재 탭 그림+초벌을 직접 보낸 경우 즉시 1건 다듬기
+  if (body?.image && body?.draft) {
+    return refineOne(env, body);
+  }
+  // 2) 드라이브 스캔 다듬기 (예약 실행 또는 수동 일괄 실행)
+  let token = reqToken;
+  const rt = await loadRefreshToken(env);
+  if (rt && (scheduled || !token)) {
+    const t = await refresh(env, { refresh_token: rt });
+    token = t.access_token;
+  }
+  if (!token) throw httpError(400, 'no_drive_token', '서버에 등록된 드라이브 토큰이 없어요');
+
+  const fq = encodeURIComponent("name='필기캘린더' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+  const fr = await dJson(token, `${DRIVE_API}?q=${fq}&fields=files(id)`);
+  const folderId = fr.files?.[0]?.id;
+  if (!folderId) return { ok: true, refined: [], reason: 'no_folder' };
+
+  const lq = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
+  const lr = await dJson(token, `${DRIVE_API}?q=${lq}&fields=files(id,name,modifiedTime)&pageSize=1000`);
+  const byName = new Map((lr.files || []).map((f) => [f.name, f]));
+
+  const readJsonFile = async (name, fallback) => {
+    const f = byName.get(name);
+    if (!f) return { id: null, data: fallback };
+    try { return { id: f.id, data: await dJson(token, `${DRIVE_API}/${f.id}?alt=media`) }; }
+    catch { return { id: f.id, data: fallback }; }
+  };
+
+  const logFile = await readJsonFile('refine-log.json', { v: 1, runs: [] });
+  const runs = Array.isArray(logFile.data?.runs) ? logFile.data.runs : [];
+  const ym = new Date().toISOString().slice(0, 7);
+  const spentUsd = runs.filter((r) => (r.date || '').startsWith(ym)).reduce((a, r) => a + (Number(r.costUsd) || 0), 0);
+  const budgetUsd = Number(env.REFINE_MONTHLY_BUDGET_USD) || 5;
+  if (spentUsd >= budgetUsd) return { ok: true, skipped: 'budget_exceeded', spentUsd, budgetUsd, refined: [] };
+
+  const glFile = await readJsonFile('glossary.json', { v: 1, items: {} });
+  const glItems = glFile.data?.items || {};
+  const glossary = Object.entries(glItems).filter(([, v]) => !v.deleted && v.word).map(([, v]) => v.word);
+
+  const dgFile = await readJsonFile('digests.json', { v: 1, days: {} });
+  const digests = dgFile.data?.days || {};
+  const gtFile = await readJsonFile('gtasks.json', { v: 1, map: {} });
+  const gtMap = gtFile.data?.map || {};
+  let gtChanged = false, glChanged = false, dgChanged = false;
+
+  const daysBack = Number(env.REFINE_DAYS_BACK) || 14;
+  const maxPages = Number(env.REFINE_MAX_PAGES_PER_RUN) || 20;
+  const minDate = new Date(Date.now() - daysBack * DAY).toISOString().slice(0, 10);
+  const targetDate = body?.date ? String(body.date).slice(0, 10) : null;
+  const noteFiles = [...byName.values()]
+    .filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f.name))
+    .map((f) => ({ ...f, ds: f.name.slice(0, 10) }))
+    .filter((f) => (targetDate ? f.ds === targetDate : f.ds >= minDate))
+    .sort((a, b) => b.ds.localeCompare(a.ds));
+
+  const refined = [];
+  let totalCost = 0, totalTokens = 0;
+
+  for (const nf of noteFiles) {
+    if (refined.length >= maxPages) break;
+    const doc = await dJson(token, `${DRIVE_API}/${nf.id}?alt=media`).catch(() => null);
+    if (!doc || !Array.isArray(doc.pages)) continue;
+    let docChanged = false;
+    for (const p of doc.pages) {
+      if (refined.length >= maxPages) break;
+      const o = p.ocr;
+      if (!p.strokes?.length || !o || o.userEdited || o.quality === 'refined' || !o.imageId) continue;
+      const sig = p.strokes.length + ':' + p.strokes.reduce((a, s) => a + (s.points?.length || 0), 0);
+      if (o.sig && o.sig !== sig) continue;
+      if (scheduled && Date.now() - (p.t || doc.updated || 0) < 3600e3) continue;
+
+      // 드라이브에서 손글씨 PNG 내려받기
+      let imgB64 = '';
+      try {
+        const ir = await dFetch(token, `${DRIVE_API}/${o.imageId}?alt=media`);
+        const u8 = new Uint8Array(await ir.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < u8.length; i += 8192) bin += String.fromCharCode(...u8.subarray(i, i + 8192));
+        imgB64 = btoa(bin);
+      } catch { continue; }
+
+      const otherText = doc.pages.filter((x) => x.id !== p.id).map((x) => x.text || x.ocr?.text || '').filter(Boolean).join('\n');
+      const res = await refineOne(env, { image: imgB64, draft: o, date: nf.ds, otherText, glossary });
+      totalCost += res.costUsd;
+      totalTokens += res.tokens;
+      refined.push({ date: nf.ds, pageId: p.id, model: res.model, changes: res.changes, before: o.text, after: res.text, costUsd: res.costUsd });
+
+      if (dry) continue;
+
+      // 할 일 체크 상태·Tasks 연결표(todoMap) 이어받기
+      const mapFromTo = new Map((res.todoMap || []).map((m) => [m.from, m.to]));
+      const oldTodos = o.todos || [], oldDone = o.done || [];
+      const newDone = (res.todos || []).map((nt) => {
+        const direct = oldTodos.indexOf(nt);
+        if (direct >= 0) return !!oldDone[direct];
+        const fromIdx = oldTodos.findIndex((ot) => mapFromTo.get(ot) === nt);
+        return fromIdx >= 0 ? !!oldDone[fromIdx] : false;
+      });
+      for (const [fromT, toT] of mapFromTo) {
+        if (!fromT || !toT || fromT === toT) continue;
+        const oldKey = `hc:${nf.ds}:${strHash36(p.id + '|' + fromT)}`;
+        const newKey = `hc:${nf.ds}:${strHash36(p.id + '|' + toT)}`;
+        if (gtMap[oldKey] && !gtMap[oldKey].deleted) {
+          gtMap[newKey] = { ...gtMap[oldKey], renameTitle: toT, t: Date.now() };
+          gtMap[oldKey] = { deleted: true, movedTo: newKey, t: Date.now() };
+          gtChanged = true;
+        }
+      }
+
+      for (const w of res.properNouns || []) {
+        const k = 'w_' + strHash36(w);
+        if (!glItems[k]) { glItems[k] = { word: w, source: 'ai', t: Date.now() }; glChanged = true; glossary.push(w); }
+      }
+
+      p.ocr = {
+        ...o,
+        draft: o.draft || { text: o.text, summary: o.summary, todos: o.todos, decisions: o.decisions, at: o.at, model: o.model },
+        text: res.text,
+        summary: res.summary,
+        todos: res.todos,
+        decisions: res.decisions,
+        done: newDone,
+        quality: 'refined',
+        refinedAt: Date.now(),
+        refinedModel: res.model,
+        changes: res.changes,
+      };
+      p.t = Date.now();
+      docChanged = true;
+    }
+
+    if (docChanged && !dry) {
+      // 저장 직전 modifiedTime 재확인 (사용자가 쓰는 중이면 건너뜀)
+      const meta = await dJson(token, `${DRIVE_API}/${nf.id}?fields=modifiedTime`).catch(() => null);
+      if (!meta || meta.modifiedTime !== nf.modifiedTime) continue;
+      doc.updated = Date.now();
+      await dSaveJson(token, folderId, nf.id, nf.name, doc);
+      const parts = doc.pages.map((p) => p.kind === 'text' ? (p.text || '').split('\n')[0] : p.ocr?.summary || (p.ocr?.text || '').split('\n')[0] || '').filter(Boolean);
+      const text = parts.join(' · ').slice(0, 120);
+      if (text) { digests[nf.ds] = { ...(digests[nf.ds] || {}), text, at: Date.now() }; dgChanged = true; }
+    }
+  }
+
+  if (!dry && refined.length) {
+    if (dgChanged) await dSaveJson(token, folderId, dgFile.id, 'digests.json', { v: 1, days: digests });
+    if (glChanged) await dSaveJson(token, folderId, glFile.id, 'glossary.json', { v: 1, items: glItems });
+    if (gtChanged) await dSaveJson(token, folderId, gtFile.id, 'gtasks.json', { v: 1, map: gtMap });
+    runs.unshift({
+      at: Date.now(),
+      date: new Date().toISOString().slice(0, 10),
+      count: refined.length,
+      tokens: totalTokens,
+      costUsd: Math.round(totalCost * 10000) / 10000,
+      items: refined.map(({ date, pageId, model, changes }) => ({ date, pageId, model, changes: (changes || []).slice(0, 5) })),
+    });
+    await dSaveJson(token, folderId, logFile.id, 'refine-log.json', { v: 1, runs: runs.slice(0, 90) });
+  }
+
+  return { ok: true, dry, refined, totalTokens, costUsd: Math.round(totalCost * 10000) / 10000, spentUsd: Math.round((spentUsd + (dry ? 0 : totalCost)) * 10000) / 10000, budgetUsd };
 }
 
 // 테스트용으로 내보냄 (Workers 런타임에는 영향 없음)

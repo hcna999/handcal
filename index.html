@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=36">
-<script src="config.js?v=36"></script>
+<link rel="stylesheet" href="style.css?v=37">
+<script src="config.js?v=37"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=36"></script>
-<script src="app.js?v=36" defer></script>
+<script src="vendor/perfect-freehand.js?v=37"></script>
+<script src="app.js?v=37" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -57,7 +57,7 @@
   <div id="month-nav" class="nav">
     <button id="side-btn" class="arrow side-btn" aria-label="캘린더 목록 열고 닫기" aria-controls="cal-side" title="캘린더 목록"><svg class="ic"><use href="#i-list"/></svg></button>
     <button id="prev-month" class="arrow" aria-label="이전">‹</button>
-    <h1 id="month-title"></h1>
+    <h1 id="month-title" title="눌러서 연·월·날짜 바로 이동"></h1>
     <button id="next-month" class="arrow" aria-label="다음">›</button>
     <button id="today-btn" class="pill">오늘</button>
     <div id="view-seg" class="seg view-seg" role="tablist" aria-label="보기">
@@ -70,7 +70,7 @@
   <div id="day-nav" class="nav hidden">
     <button id="back-btn" class="pill">‹ 달력</button>
     <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
-    <h1 id="day-title"></h1>
+    <h1 id="day-title" title="눌러서 연·월·날짜 바로 이동"></h1>
     <button id="next-day" class="arrow" aria-label="다음 날">›</button>
     <button id="panel-toggle" class="pill" aria-expanded="false">일정</button>
   </div>
@@ -129,10 +129,13 @@
         </section>
         <section class="settings-sec">
           <h3>데이터 · 기타</h3>
+          <span id="storage-info" class="settings-label"></span>
           <div class="settings-btns">
             <button id="open-export" class="pill">내보내기</button>
             <button id="open-trash" class="pill">휴지통</button>
             <button id="open-templates" class="pill">메모 서식</button>
+            <button id="open-glossary" class="pill">개인 용어집</button>
+            <button id="open-refine-log" class="pill">AI 다듬기 기록</button>
             <button id="open-lock" class="pill">앱 잠금</button>
             <button id="open-onboard" class="pill">사용법 보기</button>
           </div>
@@ -176,6 +179,7 @@
           <button data-sort="date">날짜순</button>
         </div>
         <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료 보기</label>
+        <button id="todo-clear-done" class="pill danger hidden">완료 정리</button>
       </div>
       <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터) · '금요일까지 보고서'처럼 쓰면 기한 인식" aria-label="오늘 할 일 추가" enterkeyhint="done">
       <div id="todo-items"></div>
@@ -234,10 +238,12 @@
           <input id="ev-title" placeholder="메모 일정 입력 (네이버에는 저장 안 됨)" required>
           <div class="ev-row">
             <label><input type="checkbox" id="ev-allday" checked> 종일</label>
+            <label class="ev-end-label">~ <input type="date" id="ev-end-date" aria-label="종료일"></label>
             <span id="ev-times" class="hidden">
               <input type="time" id="ev-start" value="09:00"> ~ <input type="time" id="ev-end" value="10:00">
             </span>
-            <button type="submit" class="pill primary">추가</button>
+            <button type="button" id="ev-cancel" class="pill hidden">취소</button>
+            <button type="submit" id="ev-submit" class="pill primary">추가</button>
           </div>
         </form>
       </section>
@@ -251,10 +257,14 @@
           <div id="ocr-body" class="ocr-body hidden">
             <div class="ocr-actions">
               <button id="ocr-btn" class="pill primary">글자로 변환</button>
+              <button id="ocr-refine-btn" class="pill hidden">AI 다듬기</button>
+              <button id="ocr-draft-btn" class="pill hidden">초벌 비교</button>
+              <button id="ocr-revert-btn" class="pill hidden">초벌로 되돌리기</button>
               <button id="ocr-copy" class="pill hidden">복사</button>
             </div>
             <p id="ocr-hint" class="muted-text">손글씨를 글자로 옮기고 요약·할 일을 정리해요.</p>
             <div id="ocr-result" class="hidden">
+              <div id="ocr-changes" class="ocr-changes hidden"></div>
               <label class="ocr-label" for="ocr-text">원문 (직접 고칠 수 있어요)</label>
               <textarea id="ocr-text" rows="8"></textarea>
             </div>
