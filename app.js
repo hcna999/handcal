@@ -3276,6 +3276,34 @@ function revertOcrToDraft() {
 
 // Antigravity 스케줄 자동화(Argon 모델)에서 브라우저(Chrome DevTools MCP)로 직접 다듬을 때 쓰는 도우미
 window.argonRefine = {
+  // 다른 브라우저·기기에서 복사한 연결 코드(base64 JSON) 또는 리프레시 토큰 문자열로 구글 드라이브 즉시 연결
+  async connectWithCode(raw) {
+    if (!raw) return false;
+    try {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(decodeURIComponent(escape(atob(raw))));
+      } catch {
+        parsed = { r: raw };
+      }
+      if (parsed?.r) store.set('refresh', parsed.r);
+      if (parsed?.a?.token) {
+        auth.token = parsed.a.token;
+        auth.expires = parsed.a.expires || (Date.now() + 3000 * 1000);
+        store.set('auth', { token: auth.token, expires: auth.expires });
+        store.set('wasSignedIn', true);
+      }
+      const ok = await auth.ensure();
+      if (!ok) throw new Error('토큰 갱신에 실패했어요');
+      watchExpiry();
+      await afterSignIn();
+      toast('연결 코드로 구글 드라이브에 연결됐어요!');
+      return true;
+    } catch (e) {
+      handleErr(e);
+      return false;
+    }
+  },
   async collectTargets(daysBack = 14) {
     if (auth.connected()) {
       await Promise.all([notes.syncIndex(), digests.sync(), glossary.sync(), gtasks.sync()]).catch((e) => console.warn(e));
@@ -3514,13 +3542,52 @@ async function afterSignIn() {
 
 // 중계 서버의 주기적 다듬기용으로 리프레시 토큰을 암호화 등록
 async function registerRefineToken() {
-  const rt = localStorage.getItem('grt');
+  const rt = store.get('refresh', null);
   if (!rt || !CFG.WORKER_URL || !auth.connected()) return;
   await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/refine/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken: rt }),
   });
+}
+
+// 자동화 브라우저(Chrome DevTools)처럼 구글 OAuth 팝업 로그인이 막히는 환경을 위해,
+// 이미 로그인된 기기·브라우저에서 연결 코드를 복사해 붙여넣거나 window.argonRefine.connectWithCode(code)로 연결
+function openTokenTransfer() {
+  const curRefresh = store.get('refresh', null);
+  const curAuth = store.get('auth', null);
+  const box = el('div');
+  box.style.display = 'flex';
+  box.style.flexDirection = 'column';
+  box.style.gap = '10px';
+  const desc = el('p', 'muted-text', '다른 브라우저(또는 안티그래비티 자동화 창)에서 구글 팝업 로그인이 막힐 때, 이미 로그인된 브라우저에서 연결 코드를 복사해 붙여넣으면 바로 같은 구글 드라이브에 연결됩니다.');
+  box.append(desc);
+  if (curRefresh || curAuth?.token) {
+    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({ r: curRefresh, a: curAuth }))));
+    const copyBtn = el('button', 'pill primary', '현재 로그인 연결 코드 복사하기');
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(payload);
+        toast('연결 코드를 복사했어요! 연결할 창에 붙여넣으세요.');
+      } catch {
+        prompt('아래 연결 코드를 복사하세요:', payload);
+      }
+    };
+    box.append(copyBtn);
+  }
+  const input = el('input');
+  input.type = 'text';
+  input.placeholder = '복사한 연결 코드를 여기에 붙여넣기';
+  input.style.padding = '8px 10px';
+  input.style.border = '1px solid var(--line)';
+  input.style.borderRadius = '8px';
+  const applyBtn = el('button', 'pill', '연결 코드로 로그인 적용');
+  applyBtn.onclick = async () => {
+    const ok = await window.argonRefine.connectWithCode(input.value.trim());
+    if (ok) closeModal();
+  };
+  box.append(input, applyBtn);
+  openModal('구글 로그인 연결 코드 (기기·브라우저 간 이전)', [box]);
 }
 
 function rerender() {
@@ -4870,6 +4937,7 @@ function bind() {
   $('#open-templates').onclick = openTemplateEditor;
   if ($('#open-glossary')) $('#open-glossary').onclick = () => glossary.sync().catch(() => {}).finally(openGlossary);
   if ($('#open-refine-log')) $('#open-refine-log').onclick = openRefineLog;
+  if ($('#token-transfer-btn')) $('#token-transfer-btn').onclick = openTokenTransfer;
   $('#open-onboard').onclick = () => { $('#settings').classList.add('hidden'); showOnboarding(); };
   $('#sync-now').onclick = () => { lastRefresh = 0; notes.lastSync = 0; refreshInBackground(); notes.flush(); };
   $('#ocr-head').onclick = () => { store.set('ocrOpen', !store.get('ocrOpen', false)); renderOcr(); };

@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=39">
-<script src="config.js?v=39"></script>
+<link rel="stylesheet" href="style.css?v=40">
+<script src="config.js?v=40"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=39"></script>
-<script src="app.js?v=39" defer></script>
+<script src="vendor/perfect-freehand.js?v=40"></script>
+<script src="app.js?v=40" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -85,6 +85,7 @@
           <span id="sync-status" class="settings-label"></span>
           <div class="settings-btns">
             <button id="auth-btn" class="pill primary">구글 로그인</button>
+            <button id="token-transfer-btn" class="pill" title="다른 브라우저·기기에서 로그인 연결 코드 복사/붙여넣기">연결 코드</button>
             <button id="sync-now" class="pill">지금 동기화</button>
           </div>
         </section>
