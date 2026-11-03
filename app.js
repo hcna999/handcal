@@ -529,6 +529,8 @@ const memos = {
 // 네이버 캘린더 (읽기 전용, 중계 서버 경유)
 const naver = {
   enabled() { return !!CFG.WORKER_URL && auth.connected(); },
+  // 로그인이 잠깐 만료됐어도 전에 받아 둔 일정은 보여줌
+  known() { return !!CFG.WORKER_URL && (auth.connected() || auth.wasSignedIn()); },
   warned: false,
   async load(s, e) {
     const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/naver/events?start=${encodeURIComponent(s.toISOString())}&end=${encodeURIComponent(e.toISOString())}`);
@@ -556,40 +558,124 @@ const naver = {
   },
 };
 
+// 일정 보관: 네이버 일정은 달(YYYY-MM)마다 받아온 시각을 기억하고 기기(localStorage 'naverEvents')에 저장한다.
+// 이미 받은 달은 바로 그리고(오래됐으면 뒤에서 다시 받음), 받을 때는 앞뒤 달까지 한 번에 받아 둔다.
+// 메모 일정은 늘 기기 목록(memos)에서 바로 계산한다.
+const EV_FRESH = 5 * 60e3; // 5분 지나면 뒤에서 새로 받음
+const monthKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+const monthStart = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
+function monthsIn(s, e) {
+  const out = [];
+  for (let m = monthStart(s); m < e; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) out.push(m);
+  return out;
+}
+const overlaps = (ev, s, e) => ev.start < e && (ev.end > s || (+ev.start === +ev.end && ev.start >= s));
+
 const events = {
-  cache: new Map(),
-  key: (s, e) => ymd(s) + '_' + ymd(e),
-  cached(s, e) { return this.cache.get(this.key(s, e)) || null; },
-  clear() { this.cache.clear(); },
-  reset() { this.cache.clear(); },
+  months: null, // {YYYY-MM: 받은 시각}
+  list: null, // 네이버 일정 (Date로 바꾼 것)
+  version: 0, // 네이버 일정이 바뀔 때마다 1씩 (다시 그릴지 판단)
+  inflight: new Map(),
+
+  restore() {
+    if (this.list) return;
+    const saved = store.get('naverEvents', null);
+    this.months = saved?.months || {};
+    this.list = (saved?.list || []).map((x) => ({ ...x, start: new Date(x.start), end: new Date(x.end) }));
+  },
+  persist() {
+    // 오늘 기준 앞뒤 18개월만 남김
+    const now = new Date();
+    const lo = monthKey(new Date(now.getFullYear(), now.getMonth() - 18, 1)), hi = monthKey(new Date(now.getFullYear(), now.getMonth() + 18, 1));
+    for (const k of Object.keys(this.months)) if (k < lo || k > hi) delete this.months[k];
+    const keep = this.list.filter((ev) => monthKey(ev.end) >= lo && monthKey(ev.start) <= hi);
+    store.set('naverEvents', { months: this.months, list: keep });
+  },
+  // 이 기간을 다 받아 둔 적이 있으면 (오래됐어도) 바로 돌려줌, 아니면 null
+  cached(s, e) {
+    let list = memos.visible(s, e);
+    if (naver.known()) {
+      this.restore();
+      const have = monthsIn(s, e).every((m) => this.months[monthKey(m)]);
+      if (!have && naver.enabled()) return null; // 받으러 가야 함
+      list = list.concat(this.list.filter((ev) => overlaps(ev, s, e)));
+    }
+    return list.sort(sortEvents);
+  },
+  fresh(s, e) {
+    if (!naver.enabled()) return true; // 받을 수 없으면 있는 것으로 끝
+    this.restore();
+    return monthsIn(s, e).every((m) => Date.now() - (this.months[monthKey(m)] || 0) < EV_FRESH);
+  },
+  // 앱으로 돌아왔을 때 등: 보여주던 건 그대로 두고 다음에 뒤에서 새로 받게 함
+  clear() { if (this.months) for (const k of Object.keys(this.months)) this.months[k] = 1; },
+  reset() { this.months = {}; this.list = []; this.version++; store.del('naverEvents'); },
 
   async load(s, e) {
-    let list = memos.visible(s, e);
-    if (naver.enabled()) {
+    if (!naver.enabled()) return this.cached(s, e);
+    this.restore();
+    const need = monthsIn(s, e).filter((m) => Date.now() - (this.months[monthKey(m)] || 0) >= EV_FRESH);
+    if (need.length) {
+      // 모자란 달 + 앞뒤 한 달씩 한 번에 (최대 12개월)
+      let from = need[0], to = new Date(need[need.length - 1].getFullYear(), need[need.length - 1].getMonth() + 1, 1);
+      const wider = [new Date(from.getFullYear(), from.getMonth() - 1, 1), new Date(to.getFullYear(), to.getMonth() + 1, 1)];
+      if (monthsIn(wider[0], wider[1]).length <= 12) [from, to] = wider;
       try {
-        list = list.concat(await naver.load(s, e));
+        // 이미 받으러 간 요청이 이 기간을 덮으면 그걸 기다림
+        const last = need[need.length - 1];
+        const needEnd = new Date(last.getFullYear(), last.getMonth() + 1, 1);
+        const cover = [...this.inflight.values()].find((x) => x.from <= need[0] && x.to >= needEnd);
+        await (cover ? cover.promise : this.fetchRange(from, to));
         naver.warned = false;
       } catch (err) {
         if (err.message === 'AUTH') throw err;
         if (!naver.warned) { naver.warned = true; toast('네이버 캘린더를 불러오지 못했어요: ' + err.message.slice(0, 100), 5000); }
         console.warn(err);
-        list.sort(sortEvents);
-        return list; // 실패 결과는 캐시하지 않음
+        // 실패한 달은 30초 동안 다시 요청하지 않음 (받아 둔 게 있으면 그걸로 보여줌)
+        const retry = Date.now() - EV_FRESH + 30e3;
+        for (const m of need) this.months[monthKey(m)] = Math.max(this.months[monthKey(m)] || 0, retry);
+        return this.cached(s, e);
       }
     }
-    list.sort(sortEvents);
-    this.cache.set(this.key(s, e), list);
-    return list;
+    return this.cached(s, e);
+  },
+  // 같은 기간을 동시에 두 번 요청하지 않음
+  fetchRange(from, to) {
+    const key = monthKey(from) + '~' + monthKey(to);
+    if (!this.inflight.has(key)) {
+      this.inflight.set(key, { from, to, promise: (async () => {
+        const got = await naver.load(from, to);
+        const old = this.list.filter((ev) => overlaps(ev, from, to));
+        const sig = (l) => l.map((ev) => `${ev.id}|${+ev.start}|${+ev.end}|${ev.title}|${ev.color}|${ev.calendar}`).sort().join('\n');
+        if (sig(old) !== sig(got)) this.version++;
+        const seen = new Set();
+        this.list = this.list.filter((ev) => !overlaps(ev, from, to)).concat(got).filter((ev) => {
+          const k = ev.id + '|' + +ev.start;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        const now = Date.now();
+        for (const m of monthsIn(from, to)) this.months[monthKey(m)] = now;
+        this.persist();
+      })().finally(() => this.inflight.delete(key)) });
+    }
+    return this.inflight.get(key).promise;
+  },
+  // 앞뒤 화면에 걸칠 일정을 미리 받아 둠 (넘길 때 바로 보이게, 실패해도 조용히)
+  prefetch(s, e) {
+    if (!naver.enabled() || this.fresh(s, e)) return;
+    setTimeout(() => this.load(s, e).catch(() => {}), 300);
   },
 
   on(list, day) {
     const s = day, e = addDays(day, 1);
     const hidden = hiddenCals();
-    return list.filter((ev) => !hidden.has(calKey(ev)) && ev.start < e && (ev.end > s || (+ev.start === +ev.end && ev.start >= s)));
+    return list.filter((ev) => !hidden.has(calKey(ev)) && overlaps(ev, s, e));
   },
 
-  add(ev) { memos.add(ev); this.clear(); },
-  remove(ev) { memos.remove(ev.id); this.clear(); },
+  add(ev) { memos.add(ev); },
+  remove(ev) { memos.remove(ev.id); },
 };
 
 function sortEvents(a, b) {
@@ -793,13 +879,16 @@ async function renderWeek() {
   }
   grid.replaceChildren(...cells.map((c) => c.memo.parentElement));
   grid.style.setProperty('--allday-n', maxAllday);
-  if (!evs) {
+  if (!evs || !events.fresh(start, end)) {
+    const ver = events.version;
     try {
       await events.load(start, end);
-      if (token === weekToken && state.view === 'month' && state.calView === 'week') renderWeek();
+      if (token === weekToken && state.view === 'month' && state.calView === 'week' && (!evs || events.version !== ver)) renderWeek();
     } catch (e) { handleErr(e); }
+    events.prefetch(addDays(start, -28), addDays(end, 28));
     return;
   }
+  events.prefetch(addDays(start, -28), addDays(end, 28));
   // 메모 미리보기는 노트를 읽어서 채움
   for (const { ds, memo } of cells) {
     if (!notes.has(ds)) continue;
@@ -1432,13 +1521,15 @@ async function renderMonthView() {
   }
   grid.replaceChildren(frag);
 
-  if (!evs) {
+  if (!evs || !events.fresh(start, end)) {
     const token = ++monthToken;
+    const ver = events.version;
     try {
       await events.load(start, end);
-      if (token === monthToken && state.view === 'month' && state.calView === 'month') renderMonth();
+      if (token === monthToken && state.view === 'month' && state.calView === 'month' && (!evs || events.version !== ver)) renderMonth();
     } catch (e) { handleErr(e); }
   }
+  events.prefetch(addDays(start, -35), addDays(end, 42));
 }
 
 function shiftMonth(n) {
@@ -2464,9 +2555,15 @@ async function renderDayEvents() {
   };
   const s = day, e = addDays(day, 1);
   const cached = events.cached(s, e);
-  if (cached) return draw(cached);
-  list.replaceChildren(el('li', 'muted', '불러오는 중…'));
-  try { draw(await events.load(s, e)); }
+  if (cached) {
+    draw(cached);
+    if (events.fresh(s, e)) return;
+  } else list.replaceChildren(el('li', 'muted', '불러오는 중…'));
+  try {
+    const ver = events.version;
+    const got = await events.load(s, e);
+    if (!cached || events.version !== ver) draw(got);
+  }
   catch (err) {
     handleErr(err);
     if (state.date === ds) list.replaceChildren(el('li', 'muted', '일정을 불러오지 못했어요'));
@@ -2708,6 +2805,8 @@ const autoOcr = {
   IDLE_MS: 90000,
   BACKOFF_MIN: [2, 5, 15, 30],
   enabled() { return !!CFG.WORKER_URL && auth.connected(); },
+  // 로그인이 잠깐 만료됐어도 전에 받아 둔 일정은 보여줌
+  known() { return !!CFG.WORKER_URL && (auth.connected() || auth.wasSignedIn()); },
   save() { store.set('ocrQueue', [...this.queue]); },
   // 필기가 바뀌면 호출: 일정 시간 더 손대지 않으면 대기열로
   touch(date, delay = this.IDLE_MS) {
@@ -2931,7 +3030,7 @@ async function afterSignIn() {
     templates.sync().catch(console.warn);
     noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
     prefs.sync().then(() => { renderCalFilter(); rerender(); }).catch(console.warn);
-    events.reset();
+    events.clear();
     rerender();
     await notes.flush();
     autoOcr.scan();
@@ -3714,9 +3813,14 @@ function openLockSettings() {
 const MEMO_CAL = '메모 일정', HOLIDAY_CAL = '공휴일';
 const prefs = syncedStore('prefs.json', 'prefs', 36500);
 const calKey = (ev) => (ev.source === 'memo' ? MEMO_CAL : ev.calendar || '네이버 캘린더');
-function hiddenCals() { return new Set(prefs.get('hiddenCals')?.list || []); }
+let hiddenMemo = { raw: undefined, set: new Set() };
+function hiddenCals() {
+  const raw = localStorage.getItem('prefs');
+  if (raw !== hiddenMemo.raw) hiddenMemo = { raw, set: new Set(prefs.get('hiddenCals')?.list || []) };
+  return hiddenMemo.set;
+}
 function setCalVisible(name, visible) {
-  const h = hiddenCals();
+  const h = new Set(hiddenCals());
   if (visible) h.delete(name); else h.add(name);
   prefs.put('hiddenCals', { list: [...h] });
   renderCalFilter();

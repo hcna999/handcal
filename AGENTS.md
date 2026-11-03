@@ -76,12 +76,13 @@
 ### 기기 저장
 
 - IndexedDB `handcal` / store `kv`에 키 `note:YYYY-MM-DD`로 하루 메모를 보관한다(드라이브 사본).
-- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2`, `sideOpen` …), `naverCals`(마지막으로 받은 네이버 캘린더 이름·색 목록)가 있다.
+- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2`, `sideOpen` …), `naverCals`(마지막으로 받은 네이버 캘린더 이름·색 목록), `naverEvents`(받아 둔 네이버 일정 `{months: {YYYY-MM: 받은 시각}, list}`, 오늘 앞뒤 18개월만)가 있다.
 
 ## 화면 구성 (요약)
 
 - 상단: 달력/하루 이동, 검색(돋보기), 설정(톱니바퀴 + 동기화 상태 점). 로그인·동기화 버튼은 설정 안 "계정" 칸에 있다.
 - 왼쪽 캘린더 목록 창(`#cal-side`, 상단 ☰ `#side-btn`): 작은 달력(`renderMiniCal`, 날짜 누르면 그날 열기, 제목 누르면 그 달로) + 캘린더별 보이기 체크(`renderCalFilter`). 900px 이상은 옆에 붙고 열림 여부를 `sideOpen`에 기억, 좁으면 왼쪽 서랍으로 덮는다.
+- 일정 불러오기(`events`): 네이버 일정은 달 단위로 받은 시각을 기억해 `naverEvents`에 저장한다. `events.cached(s,e)`는 받아 둔 게 있으면(오래돼도) 바로 돌려주고, `events.fresh()`가 거짓(5분 지남)이면 화면을 먼저 그린 뒤 뒤에서 `events.load()`로 새로 받아 **바뀐 경우만**(`events.version`) 다시 그린다. 받을 때는 모자란 달 + 앞뒤 한 달을 한 번에(최대 12개월), 달력·주간을 그린 뒤 `events.prefetch()`로 앞뒤 화면 것도 미리 받는다. 같은 기간 요청은 하나로 묶고(`inflight`), 실패하면 30초 뒤 다시 시도. 앱으로 돌아오면 `events.clear()`는 지우지 않고 '오래됨'으로만 표시한다. 메모 일정은 늘 `memos`에서 바로 계산.
 - 캘린더 끄고 켜기: 일정마다 `calKey(ev)`(네이버 캘린더 이름 / `메모 일정` / `공휴일`)로 묶고, `prefs`의 `hiddenCals`에 든 것은 `events.on`·`holidayOn`·검색에서 뺀다. 네이버 목록은 Worker `/naver/events` 응답의 `calendars`에서 온다.
 - 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
 - 하루 화면: 탭 줄 → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`). 일정은 상단 "일정" 버튼의 시트/패널.

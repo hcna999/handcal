@@ -148,6 +148,57 @@ try {
   for (const k of '2468') await C.p.click(`.lock-key >> text="${k}"`);
   check('맞는 번호로 열림', !(await C.p.isVisible('#lock')));
   await C.ctx.close();
+
+  // 네이버 일정 빠르게: 앞뒤 달 미리 받기, 기기에 저장해 다시 열 때 바로 보임 (중계 서버는 1.2초 늦게 응답)
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+    const p = await ctx.newPage();
+    p.on('pageerror', (e) => errors.push(e.message));
+    const H = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
+    await p.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:'x',WORKER_URL:'https://w.test'}" }));
+    await p.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+    await p.route('https://tasks.googleapis.com/**', (r) => r.fulfill({ contentType: 'application/json', body: '{"items":[]}' }));
+    await fakeDrive(p);
+    let calls = 0;
+    const d2 = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    await p.route('https://w.test/**', async (r) => {
+      if (r.request().method() === 'OPTIONS') return r.fulfill({ headers: H });
+      calls++;
+      const u = new URL(r.request().url());
+      const evs = [];
+      for (let d = new Date(u.searchParams.get('start')); d < new Date(u.searchParams.get('end')); d.setDate(d.getDate() + 1)) {
+        if (d.getDate() !== 15) continue;
+        const n = new Date(d); n.setDate(n.getDate() + 1);
+        evs.push({ id: 'e' + d2(d), title: '보름 일정', allDay: true, start: d2(d), end: d2(n), calendar: '내 캘린더', color: '#3b82f6' });
+      }
+      await new Promise((x) => setTimeout(x, 1200));
+      r.fulfill({ headers: H, contentType: 'application/json', body: JSON.stringify({ events: evs, calendars: [{ name: '내 캘린더', color: '#3b82f6' }] }) });
+    });
+    await p.addInitScript(() => {
+      localStorage.setItem('onboarded', 'true');
+      localStorage.setItem('gtasksOn', 'false');
+      localStorage.setItem('auth', JSON.stringify({ token: 't', expires: Date.now() + 3e6 }));
+      localStorage.setItem('wasSignedIn', 'true');
+    });
+    const chips = () => p.$$eval('#grid .chip:not(.spacer)', (x) => x.filter((c) => c.textContent === '보름 일정').length);
+    await p.goto(base);
+    await p.waitForSelector('#grid .chip:not(.spacer)', { timeout: 10000 });
+    await p.waitForTimeout(2500); // 앞뒤 달 미리 받기
+    const before = calls;
+    let instant = true;
+    for (const dir of ['#next-month', '#next-month', '#prev-month', '#prev-month', '#prev-month']) {
+      await p.click(dir);
+      await p.waitForTimeout(450);
+      if (!(await chips())) instant = false;
+      await p.waitForTimeout(1500);
+    }
+    check('달 넘기면 일정이 바로 보임(미리 받아 둠)', instant, `넘기는 동안 요청 ${calls - before}번`);
+    await p.reload();
+    await p.waitForSelector('.cell');
+    await p.waitForTimeout(300);
+    check('다시 열면 저장해 둔 일정이 바로 보임', (await chips()) > 0);
+    await ctx.close();
+  }
 } finally {
   await browser.close();
   server.close();
