@@ -28,6 +28,7 @@
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
 | `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표 |
+| `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금 (가짜 드라이브) |
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
@@ -54,6 +55,8 @@
 - 사진·음성 탭은 `media: [{id, type:'image'|'audio', mime, w, h, dur, driveId, transcribed}]`와 `text`(사진 설명·받아쓴 글)를 가진다. 파일은 기기 IndexedDB `blob:<id>`에 먼저 두고, 동기화 때 드라이브에 `media-날짜-id.jpg|webm|m4a`로 올려 `driveId`를 기록한다(`uploadMedia`). 다른 기기는 `driveId`로 내려받는다(`mediaBlob`).
 - 좌표는 폭 1000 기준의 논리 단위다(`PAGE_W`=1000, `PAGE_H`=1414이고 종이를 늘리면 높이가 PAGE_H씩 커진다).
 - 예전 형식(v1: 최상위에 `strokes`, `ocr`)은 `normalize()`가 첫 탭으로 바꿔 읽는다. **이 호환성을 깨지 말 것.**
+- 각 탭의 `t`는 마지막으로 바뀐 시각, 문서의 `gone{탭id: 시각}`은 지운 탭 기록이다. `notes.put`이 이전 저장본과 비교해 자동으로 채운다(`stampPages`).
+- **두 기기 동시 수정**: 올리기 직전 드라이브 파일 `modifiedTime`이 마지막으로 맞춘 시각(`remoteTime`)과 다르면 내려받아 탭 단위로 합친다(`notes.mergeRemote` → `mergeDocs`). 다른 탭은 둘 다 살리고, 같은 탭을 둘 다 고쳤으면 최신 것을 쓰고 다른 쪽은 '충돌 사본' 탭(`conflict: true`)으로 남긴다.
 - `ocr.sig`가 지금 획 상태(`inkSig`)와 다르면 다시 변환할 대상이다.
 
 ### 그 밖의 드라이브 파일 (같은 폴더)
@@ -64,6 +67,7 @@
 | `templates.json` | 메모 서식 `{id: {name, text, order, t}}` | 항목별 `t` 최신 (`syncedStore`) |
 | `events.json` | 앱에서 적는 "메모 일정" | id별 `updated`가 최신인 쪽 |
 | `digests.json` | 달력 칸 한 줄 요약 `{날짜: {text, todos, at}}` | 날짜별 `at`이 최신인 쪽 |
+| `index.json` | 날짜별 색인 `{날짜: {p: 미리보기[{kind,text,ink}], todos, u, t}}` — 목록·검색·할 일을 문서를 다 읽지 않고 그림 | 항목별 `t` 최신 (`noteIndex`) |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
 
 - 드라이브 권한은 `drive.file`이라 **앱이 만든 파일만** 볼 수 있다.
@@ -125,7 +129,7 @@ npm i -D playwright   # 처음 한 번 (브라우저: npx playwright install chr
 node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오류가 있으면 종료 코드 1
 ```
 
-- `node tests/ux.mjs [스크린샷 폴더]`, `node tests/features.mjs`로 화면 조작과 기능도 확인한다.
+- `node tests/ux.mjs [스크린샷 폴더]`, `node tests/features.mjs`, `node tests/sync.mjs`로 화면 조작·기능·동기화도 확인한다.
 - 스크립트는 구글 연결 없이 "이 기기에만 저장" 모드로 돈다. 첫 실행 안내는 `localStorage.onboarded`로 건너뛴다.
 - 구글·드라이브·Tasks·Worker가 얽힌 기능은 Playwright `page.route()`로 가짜 응답을 만들어 시험한다. 서비스 워커가 가로채지 않도록 `browser.newContext({ serviceWorkers: 'block' })`를 쓴다.
 
@@ -134,6 +138,8 @@ node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오�
 - **비밀값을 저장소에 넣지 않는다.** 저장소는 공개(public)다. `config.js`에는 공개해도 되는 값만 둔다.
 - 코드 주석과 화면 글은 **한국어**로 쓴다. 사용자는 한국어 사용자다. 기존 코드처럼 짧은 주석으로 "왜"를 적는다.
 - 프레임워크나 빌드 도구를 들이지 않는다. 파일을 그대로 올리면 동작해야 한다.
+- **앱 잠금**(설정 → 앱 잠금): 기기마다 PIN(SHA-256 + salt로 localStorage `lock`) + 가능하면 지문·얼굴(WebAuthn 플랫폼 인증). 화면만 잠그고 데이터는 암호화하지 않는다. 다른 앱에 정한 시간(바로/5분/30분) 이상 있다 돌아오면 다시 잠근다.
+- 오프라인이면 상단 막대(`#offline-bar`)와 회색 상태 점, 다시 연결되면 밀린 것을 올리고 알린다.
 - 대상 화면: 아이패드 1180×820(펜), 갤럭시 폴드 펼침 약 884×1028·접힘 약 412×915(터치), 윈도우 마우스. 글자 크기는 화면 크기로 자동 계산된다(`autoFontPx`).
 - 아이패드·아이폰은 설치 안내가 자동으로 뜨지 않으므로, 브라우저로 열면 '홈 화면에 추가' 안내를 한 번 보여준다(`showInstallHint`). 홈 화면에서 열면 `manifest.webmanifest`의 `display: standalone`으로 전체 화면이 된다.
 - 손가락은 기본으로 화면 이동, 필기는 펜으로만 한다.

@@ -279,6 +279,8 @@ const normPage = (p, id) => ({
   strokes: Array.isArray(p?.strokes) ? p.strokes : [],
   ...(p?.ocr ? { ocr: p.ocr } : {}),
   ...(p?.paper ? { paper: p.paper } : {}),
+  ...(p?.t ? { t: p.t } : {}),
+  ...(p?.conflict ? { conflict: true } : {}),
   ...(p?.kind === 'text' ? { kind: 'text', text: String(p.text || '') } : {}),
   ...(p?.kind === 'photo' || p?.kind === 'voice' ? { kind: p.kind, text: String(p.text || ''), media: Array.isArray(p.media) ? p.media : [] } : {}),
 });
@@ -288,6 +290,7 @@ const normalize = (n) => ({
   pages: Array.isArray(n?.pages) && n.pages.length ? n.pages.map((p, i) => normPage(p, 'p' + i)) : [normPage(n, 'p0')],
   updated: n?.updated || 0,
   remoteTime: n?.remoteTime,
+  ...(n?.gone ? { gone: n.gone } : {}),
 });
 const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length && !(p.text || '').trim() && !p.media?.length);
 const cloneDoc = (doc) => ({ ...doc, pages: doc.pages.map((p) => ({ ...p, strokes: p.strokes.slice(), ...(p.media ? { media: p.media.map((m) => ({ ...m })) } : {}) })) });
@@ -356,12 +359,43 @@ const notes = {
 
   async put(d, note) {
     note.updated = Date.now();
+    const prev = await idb.get('note:' + d).catch(() => null);
+    stampPages(prev && normalize(prev), note);
+    if (prev?.remoteTime && !note.remoteTime) note.remoteTime = prev.remoteTime;
+    noteIndex.update(d, note);
     if (!docEmpty(note)) { await idb.set('note:' + d, note); this.localDays.add(d); }
     else { await idb.del('note:' + d); this.localDays.delete(d); }
     this.pending.add(d);
     this.savePending();
     scheduleFlush();
     gtasks.schedule(d);
+  },
+
+  // 드라이브의 최신 수정 시각이 마지막으로 맞춘 시각과 다르면 받아서 탭 단위로 합침 (raw를 고침)
+  async mergeRemote(d, raw, r) {
+    const meta = await gapi(`${DRIVE}/${r.id}?fields=modifiedTime`).catch(() => null);
+    if (!meta || meta.modifiedTime === raw.remoteTime) return;
+    const data = await drive.read(r.id);
+    const remote = normalize(typeof data === 'string' ? JSON.parse(data) : data);
+    const base = raw.remoteTime ? Date.parse(raw.remoteTime) : 0;
+    const { doc, conflicts } = mergeDocs(normalize(raw), remote, base);
+    raw.pages = doc.pages;
+    if (doc.gone) raw.gone = doc.gone; else delete raw.gone;
+    raw.updated = Date.now();
+    await idb.set('note:' + d, raw);
+    noteIndex.update(d, normalize(raw));
+    if (state.view === 'day' && state.date === d) {
+      const curId = pad.note.id;
+      pad.doc = normalize(raw);
+      pad.pageIdx = Math.max(0, pad.doc.pages.findIndex((p) => p.id === curId));
+      $('#text-page').dataset.pageId = '';
+      $('#media-page').dataset.pageId = '';
+      renderTabs();
+      renderOcr();
+      layoutPad();
+    }
+    listState.cache.delete(d);
+    toast(conflicts ? '다른 기기에서도 고쳐서, 겹친 탭은 사본으로 남겼어요' : '다른 기기의 수정과 합쳤어요', 4000);
   },
 
   async flush() {
@@ -377,7 +411,8 @@ const notes = {
         const r = this.remote.get(d);
         if (local && !docEmpty(local)) {
           await uploadMedia(d, raw);
-          const payload = { v: 2, date: d, pages: normalize(raw).pages, updated: raw.updated };
+          if (r) await this.mergeRemote(d, raw, r);
+          const payload = { v: 2, date: d, pages: normalize(raw).pages, updated: raw.updated, ...(raw.gone ? { gone: raw.gone } : {}) };
           const f = r ? await drive.update(r.id, payload) : await drive.create(d + '.json', payload);
           this.remote.set(d, f);
           const cur = await idb.get('note:' + d);
@@ -791,12 +826,18 @@ async function renderList() {
   const targets = q ? dates : dates.slice(0, listState.shown);
   const items = [];
   for (const ds of targets) {
-    let doc = listState.cache.get(ds);
-    if (!doc) {
-      try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
-      if (token !== listState.token) return;
+    // 색인에 글만 있으면 문서를 읽지 않음 (손글씨 그림이 필요할 때만 읽음)
+    const ix = noteIndex.get(ds);
+    let prev;
+    if (ix && !listState.cache.has(ds) && !ix.p.some((x) => x.ink)) prev = ix.p;
+    else {
+      let doc = listState.cache.get(ds);
+      if (!doc) {
+        try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
+        if (token !== listState.token) return;
+      }
+      prev = docPreview(doc);
     }
-    const prev = docPreview(doc);
     if (!prev.length) continue;
     if (q && !prev.some((p) => p.text.toLowerCase().includes(q))) continue;
     items.push(listItem(ds, prev));
@@ -883,12 +924,18 @@ async function renderTodos() {
   if (!box.children.length) box.replaceChildren(el('p', 'muted-text', '불러오는 중…'));
   const all = [];
   for (const ds of allNoteDates()) {
-    let doc = listState.cache.get(ds);
-    if (!doc) {
-      try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
-      if (token !== todoState.token) return;
+    const ix = noteIndex.get(ds);
+    let list;
+    if (ix && !listState.cache.has(ds)) list = ix.todos.map((t) => ({ ...t, due: parseDue(t.text, parseYmd(ds)) }));
+    else {
+      let doc = listState.cache.get(ds);
+      if (!doc) {
+        try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
+        if (token !== todoState.token) return;
+      }
+      list = todosOf(doc, ds);
     }
-    for (const t of todosOf(doc, ds)) all.push({ ...t, ds });
+    for (const t of list) all.push({ ...t, ds });
   }
   if (token !== todoState.token) return;
   const left = all.filter((t) => !t.done).length;
@@ -940,9 +987,6 @@ async function renderTodos() {
     }));
   }
 }
-
-// 날짜별 미리보기 색인 (4단계에서 드라이브 index.json으로 확장)
-const noteIndex = { doc: () => null };
 
 // ---------- 음력·공휴일 (브라우저 내장 한국 음력 '단기' 달력 사용)
 const lunarFmt = (() => {
@@ -2783,7 +2827,8 @@ async function runOcr() {
 function setStatus(kind) {
   const s = $('#sync-status');
   if (!kind) {
-    if (!auth.connected()) kind = auth.wasSignedIn() ? 'expired' : 'local';
+    if (!navigator.onLine) kind = 'offline';
+    else if (!auth.connected()) kind = auth.wasSignedIn() ? 'expired' : 'local';
     else kind = notes.pending.size ? 'saving' : 'synced';
   }
   $('#sync-dot').dataset.state = kind;
@@ -2877,6 +2922,7 @@ async function afterSignIn() {
     await digests.sync();
     trash.sync().catch(console.warn);
     templates.sync().catch(console.warn);
+    noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
     events.reset();
     rerender();
     await notes.flush();
@@ -3473,6 +3519,189 @@ function syncedStore(fileName, storeKey, keepDays = 60) {
   };
 }
 
+// ---------- 두 기기에서 같은 날을 고쳤을 때 탭 단위로 합치기
+// 각 탭은 마지막으로 바뀐 시각 t, 문서는 지운 탭 기록 gone{id: 시각}을 가짐 (notes.put이 자동으로 기록)
+function stampPages(prev, next) {
+  const now = Date.now();
+  const old = new Map((prev?.pages || []).map((p) => [p.id, p]));
+  const sig = (p) => JSON.stringify({ ...p, t: undefined });
+  for (const p of next.pages) {
+    const o = old.get(p.id);
+    if (!o || sig(o) !== sig(p)) p.t = now;
+    else if (o.t) p.t = o.t;
+  }
+  const gone = { ...(prev?.gone || {}), ...(next.gone || {}) };
+  for (const id of old.keys()) if (!next.pages.some((p) => p.id === id)) gone[id] = now;
+  const cutoff = now - 60 * 86400e3;
+  for (const [id, t] of Object.entries(gone)) if (t < cutoff || next.pages.some((p) => p.id === id && (p.t || 0) > t)) delete gone[id];
+  if (Object.keys(gone).length) next.gone = gone;
+  else delete next.gone;
+}
+
+function mergeDocs(local, remote, base) {
+  const pages = [];
+  const rById = new Map(remote.pages.map((p) => [p.id, p]));
+  const gone = { ...(remote.gone || {}) };
+  for (const [id, t] of Object.entries(local.gone || {})) gone[id] = Math.max(gone[id] || 0, t);
+  let conflicts = 0;
+  for (const lp of local.pages) {
+    const rp = rById.get(lp.id);
+    if (!rp) { if (!(remote.gone?.[lp.id] > (lp.t || 0))) pages.push(lp); continue; }
+    rById.delete(lp.id);
+    const lt = lp.t || 0, rt = rp.t || 0;
+    const same = JSON.stringify({ ...lp, t: 0 }) === JSON.stringify({ ...rp, t: 0 });
+    if (same) { pages.push(lt >= rt ? lp : rp); continue; }
+    // 둘 다 지난 동기화 뒤에 고쳤으면: 최신 것을 쓰고 다른 쪽은 '충돌 사본' 탭으로 살림
+    pages.push(lt >= rt ? lp : rp);
+    if (lt > base && rt > base) {
+      const older = lt >= rt ? rp : lp;
+      pages.push({ ...older, id: older.id + '-c' + Date.now().toString(36), t: Date.now(), conflict: true, ...(older.kind === 'text' || older.kind === 'voice' ? { text: '(다른 기기에서 고친 내용)\n' + (older.text || '') } : {}) });
+      conflicts++;
+    }
+  }
+  for (const rp of rById.values()) if (!(local.gone?.[rp.id] > (rp.t || 0))) pages.push(rp);
+  const doc = { v: 2, pages: pages.length ? pages : [blankPage('text')], updated: Date.now() };
+  for (const id of Object.keys(gone)) if (pages.some((p) => p.id === id && (p.t || 0) > gone[id])) delete gone[id];
+  if (Object.keys(gone).length) doc.gone = gone;
+  return { doc, conflicts };
+}
+
+// ---------- 날짜별 색인: 드라이브 index.json (미리보기 글·할 일). 처음 여는 기기도 목록·검색·할 일이 빠름
+const noteIndex = Object.assign(syncedStore('index.json', 'noteIndex', 3650), {
+  entry(doc, ds) {
+    return {
+      p: docPreview(doc).map((x) => ({ kind: x.kind, text: x.text, ink: !!x.page && !x.text })),
+      todos: todosOf(doc, ds).map(({ pageId, kind, line, idx, text, done }) => ({ pageId, kind, line, idx, text, done })),
+      u: doc.updated || Date.now(),
+    };
+  },
+  update(ds, doc) {
+    if (!doc || docEmpty(doc)) { this.del(ds); return; }
+    this.put(ds, this.entry(doc, ds));
+  },
+  // 검색에 쓸 가벼운 문서 모양
+  doc(ds) {
+    const e = this.get(ds);
+    return e ? { pages: e.p.map((x) => ({ id: 'ix', kind: 'text', text: x.text, strokes: [] })) } : null;
+  },
+  // 이 기기에 있는데 색인에 없는 날짜를 채움
+  async fill() {
+    for (const ds of notes.localDays) {
+      if (this.get(ds)) continue;
+      const raw = await idb.get('note:' + ds).catch(() => null);
+      if (raw) this.put(ds, this.entry(normalize(raw), ds));
+    }
+  },
+});
+
+// ---------- 앱 잠금: PIN(필수) + 지문·얼굴(가능한 기기). 기기마다 따로, 화면만 잠금(데이터 암호화는 아님)
+const appLock = {
+  conf() { return store.get('lock', null); },
+  hiddenAt: 0,
+  async hash(pin, salt) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + ':' + pin));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  },
+  async check(pin) { const c = this.conf(); return !!c && (await this.hash(pin, c.salt)) === c.hash; },
+  show() {
+    const c = this.conf();
+    if (!c) return;
+    let entered = '';
+    const dots = () => $('#lock-dots').replaceChildren(...Array.from({ length: Math.max(4, entered.length) }, (_, i) => el('span', 'lock-dot' + (i < entered.length ? ' on' : ''))));
+    const press = async (k) => {
+      if (k === '⌫') entered = entered.slice(0, -1);
+      else if (entered.length < 8) entered += k;
+      dots();
+      if (entered.length >= c.len && (await this.check(entered))) this.unlock();
+      else if (entered.length >= c.len) { $('#lock-msg').textContent = '번호가 달라요'; entered = ''; setTimeout(dots, 300); }
+    };
+    $('#lock-pad').replaceChildren(...['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((k) => {
+      const b = el('button', 'lock-key', k);
+      if (!k) b.disabled = true;
+      b.onclick = () => press(k);
+      return b;
+    }));
+    $('#lock-msg').textContent = '';
+    dots();
+    $('#lock-bio').classList.toggle('hidden', !c.credId);
+    $('#lock-bio').onclick = () => this.bio();
+    $('#lock').classList.remove('hidden');
+    this.onKey = (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('⌫'); e.stopPropagation(); };
+    document.addEventListener('keydown', this.onKey, true);
+    if (c.credId) this.bio();
+  },
+  unlock() {
+    $('#lock').classList.add('hidden');
+    document.removeEventListener('keydown', this.onKey, true);
+  },
+  async bio() {
+    const c = this.conf();
+    try {
+      const id = Uint8Array.from(atob(c.credId), (ch) => ch.charCodeAt(0));
+      await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), allowCredentials: [{ id, type: 'public-key' }], userVerification: 'required', timeout: 60000 } });
+      this.unlock();
+    } catch { $('#lock-msg').textContent = '번호로 열어 주세요'; }
+  },
+  async registerBio() {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: '필기캘린더' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'owner', displayName: '필기캘린더 사용자' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+      timeout: 60000,
+    } });
+    return btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+  },
+};
+
+function openLockSettings() {
+  const c = appLock.conf();
+  const nodes = [el('p', 'muted-text', '이 기기에서 앱을 열 때 번호(또는 지문·얼굴)를 물어요. 화면만 잠그며, 기기마다 따로 설정해요.')];
+  if (!c) {
+    const pin = Object.assign(el('input'), { type: 'password', inputMode: 'numeric', placeholder: '번호 4~8자리', maxLength: 8 });
+    const pin2 = Object.assign(el('input'), { type: 'password', inputMode: 'numeric', placeholder: '한 번 더', maxLength: 8 });
+    const bioWrap = el('label', 'todo-toggle');
+    const bio = Object.assign(el('input'), { type: 'checkbox' });
+    bioWrap.append(bio, document.createTextNode(' 지문·얼굴로도 열기'));
+    const ok = el('button', 'pill primary', '잠금 켜기');
+    ok.onclick = async () => {
+      if (!/^\d{4,8}$/.test(pin.value)) return toast('숫자 4~8자리로 정해 주세요');
+      if (pin.value !== pin2.value) return toast('두 번 입력한 번호가 달라요');
+      const salt = Math.random().toString(36).slice(2);
+      const conf = { salt, hash: await appLock.hash(pin.value, salt), len: pin.value.length, after: 5 };
+      if (bio.checked) {
+        try { conf.credId = await appLock.registerBio(); } catch { toast('지문·얼굴 등록은 건너뛰었어요 (번호로만 잠금)'); }
+      }
+      store.set('lock', conf);
+      closeModal();
+      toast('앱 잠금을 켰어요');
+    };
+    const form = el('div', 'lock-form');
+    form.append(pin, pin2);
+    if (window.PublicKeyCredential) form.append(bioWrap);
+    form.append(ok);
+    nodes.push(form);
+  } else {
+    const after = el('div', 'seg');
+    for (const [v, label] of [[0, '바로'], [5, '5분 뒤'], [30, '30분 뒤']]) {
+      const b = el('button', c.after === v ? 'active' : '', label);
+      b.onclick = () => { store.set('lock', { ...appLock.conf(), after: v }); openLockSettings(); };
+      after.append(b);
+    }
+    const pin = Object.assign(el('input'), { type: 'password', inputMode: 'numeric', placeholder: '지금 번호', maxLength: 8 });
+    const off = el('button', 'pill danger', '잠금 끄기');
+    off.onclick = async () => {
+      if (!(await appLock.check(pin.value))) return toast('번호가 달라요');
+      store.del('lock');
+      closeModal();
+      toast('앱 잠금을 껐어요');
+    };
+    nodes.push(el('span', 'settings-label', '다른 앱을 쓰다 돌아오면 잠그기'), after, el('span', 'settings-label', '끄려면 번호 입력'), pin, off);
+  }
+  openModal('앱 잠금', nodes);
+}
+
 // 휴지통: 지운 탭을 30일 보관 (드라이브 trash.json으로 기기끼리 공유)
 const trash = Object.assign(syncedStore('trash.json', 'trash', 30), {
   add(date, page) { this.put(page.id, { date, page, at: Date.now() }); },
@@ -3802,6 +4031,7 @@ function bind() {
   document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#pop-menu')) hideMenu(); }, true);
   $('#modal-close').onclick = closeModal;
   $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+  $('#open-lock').onclick = openLockSettings;
   $('#open-trash').onclick = () => trash.sync().catch(() => {}).finally(openTrash);
   $('#open-templates').onclick = openTemplateEditor;
   $('#open-onboard').onclick = () => { $('#settings').classList.add('hidden'); showOnboarding(); };
@@ -4095,9 +4325,20 @@ function bindPad() {
       settings.apply();
     }, 150);
   });
-  window.addEventListener('online', () => { notes.flush(); refreshInBackground(); autoOcr.kick(); });
+  window.addEventListener('online', async () => {
+    setStatus();
+    const had = notes.pending.size;
+    await notes.flush();
+    refreshInBackground();
+    autoOcr.kick();
+    if (had && auth.connected()) toast('다시 연결됐어요 · 밀린 메모를 올렸어요');
+  });
   window.addEventListener('offline', () => setStatus('offline'));
   document.addEventListener('visibilitychange', () => {
+    // 잠금: 정한 시간보다 오래 다른 앱에 있다 돌아오면 다시 잠금
+    const lock = appLock.conf();
+    if (document.visibilityState === 'hidden') appLock.hiddenAt = Date.now();
+    else if (lock && appLock.hiddenAt && Date.now() - appLock.hiddenAt >= (lock.after ?? 5) * 60000) appLock.show();
     if (document.visibilityState === 'hidden') saveNow();
     else refreshInBackground();
   });
@@ -4129,6 +4370,8 @@ async function init() {
   history.replaceState(null, '', location.pathname);
   renderMonth();
   if (openToday) openDay(ymd(new Date()));
+  if (appLock.conf()) appLock.show();
+  noteIndex.fill().catch(console.warn);
   showInstallHint();
   if (!store.get('onboarded', false)) showOnboarding();
   takeShared(shared).catch((e) => console.warn('공유받기', e));

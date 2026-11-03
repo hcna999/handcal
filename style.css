@@ -736,3 +736,15 @@ body.in-day .fab { display: none; }
 .tool .ic { width: 1.15rem; height: 1.15rem; }
 /* 선택 막대는 필기장을 밀어내지 않게 화면 아래에 떠 있음 */
 .sel-bar { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 16px); transform: translateX(-50%); z-index: 20; border: 1px solid var(--accent-border); border-radius: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, .2); max-width: calc(100vw - 24px); }
+
+/* ================= 개선 4단계 ================= */
+/* 앱 잠금 */
+.lock { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: grid; place-items: center; }
+.lock-box { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.lock-dots { display: flex; gap: 10px; min-height: 14px; }
+.lock-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); }
+.lock-dot.on { background: var(--accent); border-color: var(--accent); }
+.lock-pad { display: grid; grid-template-columns: repeat(3, 4.2rem); gap: 10px; }
+.lock-key { height: 4.2rem; border-radius: 50%; border: 1px solid var(--line); background: var(--card); font-size: 1.4rem; }
+.lock-form { display: flex; flex-direction: column; gap: 8px; }
+.lock-form input, .modal-body > input { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--input); color: var(--text); font: inherit; }

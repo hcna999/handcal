@@ -26,6 +26,8 @@ jobs:
         run: node tests/ux.mjs
       - name: 기능 확인
         run: node tests/features.mjs
+      - name: 동기화·안정성 확인
+        run: node tests/sync.mjs
       - name: 개발 안내 최신화 확인
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: |
