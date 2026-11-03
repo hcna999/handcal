@@ -3274,6 +3274,105 @@ function revertOcrToDraft() {
   toast('초벌 변환 결과로 되돌렸어요');
 }
 
+// Antigravity 스케줄 자동화(Argon 모델)에서 브라우저(Chrome DevTools MCP)로 직접 다듬을 때 쓰는 도우미
+window.argonRefine = {
+  async collectTargets(daysBack = 14) {
+    if (auth.connected()) {
+      await Promise.all([notes.syncIndex(), digests.sync(), glossary.sync(), gtasks.sync()]).catch((e) => console.warn(e));
+    }
+    const minDate = ymd(addDays(new Date(), -daysBack));
+    const dates = allNoteDates().filter((d) => d >= minDate);
+    const items = [];
+    for (const date of dates) {
+      const doc = state.date === date && state.view === 'day' ? pad.doc : await notes.get(date);
+      const dayEvents = (events.forDay(parseYmd(date)) || []).map((e) => e.title);
+      const otherText = doc.pages
+        .filter((p) => p.kind === 'text' && p.text?.trim())
+        .map((p) => p.text.trim().slice(0, 200));
+      for (const page of doc.pages) {
+        if (page.kind || !page.strokes?.length) continue;
+        const o = page.ocr;
+        if (o?.userEdited) continue;
+        const stale = needsOcr(page);
+        if (!stale && o?.quality === 'refined') continue;
+        const image = noteImage(page);
+        if (!image) continue;
+        items.push({
+          date,
+          pageId: page.id,
+          sig: inkSig(page),
+          image,
+          draft: o ? { text: o.text || '', summary: o.summary || '', todos: o.todos || [], decisions: o.decisions || [] } : null,
+          context: { events: dayEvents, otherNotes: otherText },
+        });
+      }
+    }
+    return {
+      connected: auth.connected(),
+      syncStatus: $('#sync-status')?.textContent || '',
+      glossary: glossary.words(),
+      count: items.length,
+      items,
+    };
+  },
+  async applyResult({ date, pageId, sig, text = '', summary = '', todos = [], decisions = [], todoMap = [], newGlossary = [], changes = [], model = 'gemini-4-argon' }) {
+    const isCurrent = state.date === date && state.view === 'day';
+    const doc = isCurrent ? pad.doc : await notes.get(date);
+    const page = doc.pages.find((p) => p.id === pageId);
+    if (!page || inkSig(page) !== sig) return { ok: false, reason: 'sig_mismatch' };
+    const prev = page.ocr || {};
+    const draftSnap = prev.draft || (prev.text ? { text: prev.text, summary: prev.summary || '', todos: prev.todos || [], decisions: prev.decisions || [] } : null);
+    const oldDone = prev.done || [];
+    const oldTodos = prev.todos || [];
+    const mapByNew = new Map((todoMap || []).map((m) => [m.to, m.from]));
+    const newDone = (todos || []).map((t) => {
+      const fromText = mapByNew.get(t) || t;
+      const idx = oldTodos.indexOf(fromText);
+      return idx >= 0 ? !!oldDone[idx] : false;
+    });
+    for (const m of todoMap || []) {
+      if (!m.from || !m.to || m.from === m.to) continue;
+      const oldKey = gtasks.key(date, { pageId, text: m.from });
+      const newKey = gtasks.key(date, { pageId, text: m.to });
+      const entry = gtasks.entry(oldKey);
+      if (entry) {
+        gtasks.setEntry(newKey, { ...entry, renameTitle: m.to });
+        gtasks.map[oldKey] = { ...entry, movedTo: newKey, deleted: true, t: Date.now() };
+      }
+    }
+    for (const w of newGlossary || []) glossary.add(w, 'auto');
+    page.ocr = {
+      ...prev,
+      sig,
+      at: Date.now(),
+      text,
+      summary,
+      todos,
+      decisions,
+      done: newDone,
+      quality: 'refined',
+      refinedAt: Date.now(),
+      model,
+      ...(draftSnap ? { draft: draftSnap } : {}),
+      changes: changes || [],
+    };
+    delete page.ocr.userEdited;
+    if (isCurrent) {
+      await saveNow();
+      renderOcr();
+      renderTabs();
+    } else {
+      await notes.put(date, doc);
+    }
+    refreshDigest(date, doc);
+    if (state.view === 'month') renderMonth();
+    if (auth.connected()) {
+      await Promise.all([notes.flush(), digests.sync(), glossary.sync(), gtasks.sync()]).catch((e) => console.warn(e));
+    }
+    return { ok: true, date, pageId, changesCount: (changes || []).length };
+  },
+};
+
 // ---------- 동기화 상태 / 알림
 function setStatus(kind) {
   const s = $('#sync-status');
