@@ -815,3 +815,17 @@ body.in-day .side-backdrop { display: none !important; }
 .glossary-chip button { min-height: 0; padding: 0 3px; color: var(--muted); border: 0; }
 .refine-log-row { border-top: 1px solid var(--line); padding: 8px 0; font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px; }
 
+/* ---------- 하루 화면 왼쪽 패널: 할 일 + 손글씨 할 일 입력 + 일정 */
+.day-todo-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.day-todo-list .todo-row { padding: 4px 2px; font-size: 0.875rem; }
+.day-todo-form { display: flex; gap: 6px; margin-bottom: 10px; }
+.day-todo-form input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 0.875rem; background: var(--input); color: var(--text); }
+.day-todo-ink-wrap { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.day-todo-ink-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 0.8125rem; color: var(--muted-strong); font-weight: 600; }
+.day-todo-ink-btns { display: flex; gap: 4px; }
+.day-todo-ink-btns .pill { min-height: 1.8rem; padding: 2px 8px; font-size: 0.78rem; }
+.day-todo-canvas { width: 100%; height: 96px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: crosshair; }
+.day-events-details { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.day-events-details summary { font-size: 0.85rem; font-weight: 600; color: var(--muted-strong); cursor: pointer; padding: 2px 0 6px; }
+
+

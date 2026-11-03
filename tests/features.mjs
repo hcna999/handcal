@@ -153,11 +153,18 @@ try {
   await p.click('#modal-close');
   await p.waitForTimeout(100);
 
-  // 6-2 메모 일정 수정 & 6-3 탭 이름 바꾸기·순서 이동
+  // 6-2 하루 패널 할 일 추가 & 메모 일정 수정 & 6-3 탭 이름 바꾸기·순서 이동
   await p.click('.cell.today');
   await p.waitForTimeout(400);
   await p.click('#panel-toggle');
   await p.waitForTimeout(200);
+  await p.fill('#day-todo-input', '패널에서 추가한 할 일');
+  await p.click('#day-todo-submit');
+  await p.waitForTimeout(200);
+  const dayTodosTxt = await p.textContent('#day-todo-list');
+  check('하루 왼쪽 패널에서 할 일 추가', dayTodosTxt.includes('패널에서 추가한 할 일'), dayTodosTxt);
+  await p.click('#events-summary');
+  await p.waitForTimeout(100);
   await p.click('#event-list li.editable');
   await p.waitForTimeout(150);
   check('메모 일정 수정 모드', (await p.textContent('#ev-submit')) === '저장' && (await p.inputValue('#ev-title')) === '주간회의');

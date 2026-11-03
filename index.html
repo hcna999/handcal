@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=42">
-<script src="config.js?v=42"></script>
+<link rel="stylesheet" href="style.css?v=43">
+<script src="config.js?v=43"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=42"></script>
-<script src="app.js?v=42" defer></script>
+<script src="vendor/perfect-freehand.js?v=43"></script>
+<script src="app.js?v=43" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -72,7 +72,7 @@
     <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
     <h1 id="day-title" title="눌러서 연·월·날짜 바로 이동"></h1>
     <button id="next-day" class="arrow" aria-label="다음 날">›</button>
-    <button id="panel-toggle" class="pill" aria-expanded="false">일정</button>
+    <button id="panel-toggle" class="pill" aria-expanded="false">할 일</button>
   </div>
   <div class="right">
     <button id="search-btn" class="icon-btn" aria-label="검색" title="검색"><svg class="ic"><use href="#i-search"/></svg></button>
@@ -233,20 +233,38 @@
         <button id="panel-close" class="pill">닫기</button>
       </div>
       <section id="events-panel" class="panel-sec">
-        <h2 id="events-summary">일정</h2>
-        <ul id="event-list"></ul>
-        <form id="event-form" autocomplete="off">
-          <input id="ev-title" placeholder="메모 일정 입력 (네이버에는 저장 안 됨)" required>
-          <div class="ev-row">
-            <label><input type="checkbox" id="ev-allday" checked> 종일</label>
-            <label class="ev-end-label">~ <input type="date" id="ev-end-date" aria-label="종료일"></label>
-            <span id="ev-times" class="hidden">
-              <input type="time" id="ev-start" value="09:00"> ~ <input type="time" id="ev-end" value="10:00">
-            </span>
-            <button type="button" id="ev-cancel" class="pill hidden">취소</button>
-            <button type="submit" id="ev-submit" class="pill primary">추가</button>
-          </div>
+        <h2 id="day-todos-summary">할 일</h2>
+        <div id="day-todo-list" class="day-todo-list"></div>
+        <form id="day-todo-form" class="day-todo-form" autocomplete="off">
+          <input id="day-todo-input" placeholder="할 일 입력 후 엔터 (예: 금요일까지 보고서)">
+          <button type="submit" id="day-todo-submit" class="pill primary">추가</button>
         </form>
+        <div class="day-todo-ink-wrap">
+          <div class="day-todo-ink-head">
+            <span>✎ 손글씨로 할 일 쓰기</span>
+            <div class="day-todo-ink-btns">
+              <button type="button" id="day-todo-ink-clear" class="pill">지우기</button>
+              <button type="button" id="day-todo-ink-add" class="pill primary">인식해 추가</button>
+            </div>
+          </div>
+          <canvas id="day-todo-canvas" class="day-todo-canvas" width="520" height="150"></canvas>
+        </div>
+        <details id="day-events-details" class="day-events-details">
+          <summary id="events-summary">일정</summary>
+          <ul id="event-list"></ul>
+          <form id="event-form" autocomplete="off">
+            <input id="ev-title" placeholder="메모 일정 입력 (네이버에는 저장 안 됨)" required>
+            <div class="ev-row">
+              <label><input type="checkbox" id="ev-allday" checked> 종일</label>
+              <label class="ev-end-label">~ <input type="date" id="ev-end-date" aria-label="종료일"></label>
+              <span id="ev-times" class="hidden">
+                <input type="time" id="ev-start" value="09:00"> ~ <input type="time" id="ev-end" value="10:00">
+              </span>
+              <button type="button" id="ev-cancel" class="pill hidden">취소</button>
+              <button type="submit" id="ev-submit" class="pill primary">추가</button>
+            </div>
+          </form>
+        </details>
       </section>
       </aside>
       <div id="page-scroll" class="page-scroll">

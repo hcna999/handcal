@@ -2384,6 +2384,8 @@ async function openDay(ds, { push = true } = {}) {
     pad.pageIdx = Math.max(0, note.pages.findIndex((p) => p.strokes.length || (p.text || '').trim()));
     renderTabs();
     renderOcr();
+    renderDayTodos();
+    todoInk.clear();
     layoutPad();
     if (pad.note.kind === 'text') focusText();
   } catch (e) {
@@ -2698,15 +2700,180 @@ function cancelEditEvent() {
   }
 }
 
+// 하루 화면 왼쪽 패널: 이 날짜의 할 일 목록 + 키보드 할 일 추가 + 손글씨(OCR) 할 일 추가
+function updatePanelToggleLabel(evCount) {
+  const btn = $('#panel-toggle');
+  if (!btn) return;
+  const todos = state.date && pad.doc ? todosOf(pad.doc, state.date) : [];
+  const left = todos.filter((t) => !t.done).length;
+  const cachedEv = evCount ?? (state.date ? events.on(events.cached(parseYmd(state.date), addDays(parseYmd(state.date), 1)) || [], parseYmd(state.date)).length : 0);
+  if (left > 0) btn.textContent = `할 일 ${left}`;
+  else if (todos.length > 0) btn.textContent = `할 일 ✓`;
+  else if (cachedEv > 0) btn.textContent = `할 일 · 일정 ${cachedEv}`;
+  else btn.textContent = '할 일';
+}
+
+function renderDayTodos() {
+  const box = $('#day-todo-list');
+  const sum = $('#day-todos-summary');
+  if (!box || !sum || !state.date) return;
+  const ds = state.date;
+  const todos = todosOf(pad.doc, ds);
+  const left = todos.filter((t) => !t.done).length;
+  sum.textContent = todos.length ? `할 일 ${todos.length}개 (남음 ${left})` : '할 일';
+  updatePanelToggleLabel();
+  if (!todos.length) {
+    box.replaceChildren(el('p', 'muted-text', '아직 할 일이 없어요. 아래에 치거나 펜으로 써서 바로 추가해 보세요.'));
+    return;
+  }
+  box.replaceChildren(...todos.map((t) => {
+    const row = el('label', 'todo-row' + (t.done ? ' done' : ''));
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = t.done;
+    cb.onchange = () => {
+      if (!setTodoDone(pad.doc, t, cb.checked)) return renderDayTodos();
+      if (pad.note.kind === 'text') $('#text-page').value = pad.note.text || '';
+      renderTextTodos();
+      renderDayTodos();
+      saveSoon();
+      refreshDigest(ds, pad.doc);
+    };
+    row.append(cb, el('span', 'todo-text', t.text));
+    if (t.due) row.append(el('span', 'todo-due' + (t.due < ymd(new Date()) && !t.done ? ' over' : ''), dueLabel(t.due)));
+    if (t.kind === 'ocr') row.append(icon('pen', 'ic todo-src'));
+    return row;
+  }));
+}
+
+async function addDayTodosFromLines(lines) {
+  if (!state.date) return;
+  const clean = lines.map((l) => l.replace(TODO_RE, '$3').replace(/^[-*•\d.)\s]+/, '').trim()).filter(Boolean);
+  if (!clean.length) return;
+  // 지금 열린 탭이 손글씨 탭이고 이미 OCR이 있으면 그 탭의 할 일(ocr.todos)에 바로 넣거나, 타자 메모 탭에 '☐ 내용' 줄로 추가
+  if (!pad.note.kind && pad.note.strokes?.length && pad.note.ocr) {
+    pad.note.ocr.todos = pad.note.ocr.todos || [];
+    pad.note.ocr.done = pad.note.ocr.done || [];
+    for (const text of clean) {
+      pad.note.ocr.todos.push(text);
+      pad.note.ocr.done.push(false);
+    }
+    if (pad.note.ocr.text && !pad.note.ocr.text.includes(clean[0])) {
+      pad.note.ocr.text = (pad.note.ocr.text.trim() + '\n' + clean.map((c) => '☐ ' + c).join('\n')).trim();
+    }
+    renderOcr();
+  } else {
+    for (const text of clean) {
+      if (!appendTodoLine(pad.doc, text)) {
+        toast(`탭이 ${MAX_TABS}개로 가득 찼어요`);
+        break;
+      }
+    }
+    if (pad.note.kind === 'text') {
+      $('#text-page').value = pad.note.text || '';
+      renderTextTodos();
+    }
+  }
+  renderTabs();
+  renderDayTodos();
+  saveSoon();
+  refreshDigest(state.date, pad.doc);
+  toast(clean.length > 1 ? `할 일 ${clean.length}개를 추가했어요` : `'${clean[0]}' 할 일을 추가했어요`);
+}
+
+// 왼쪽 패널의 미니 손글씨 할 일 패드
+const todoInk = {
+  strokes: [],
+  active: null,
+  timer: null,
+  init() {
+    const c = $('#day-todo-canvas');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const pt = (e) => {
+      const r = c.getBoundingClientRect();
+      return [(e.clientX - r.left) * (c.width / (r.width || 1)), (e.clientY - r.top) * (c.height / (r.height || 1)), e.pressure || 0.5];
+    };
+    const redrawMini = () => {
+      ctx.clearRect(0, 0, c.width, c.height);
+      const wasDark = darkInk;
+      darkInk = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      for (const s of this.strokes) drawStroke(ctx, s);
+      if (this.active) drawStroke(ctx, this.active);
+      darkInk = wasDark;
+    };
+    this.redraw = redrawMini;
+    c.addEventListener('pointerdown', (e) => {
+      if (e.button && e.button !== 0) return;
+      e.preventDefault();
+      clearTimeout(this.timer);
+      try { c.setPointerCapture(e.pointerId); } catch {}
+      this.active = { id: e.pointerId, tool: 'pen', color: COLORS[0], size: SIZES[1], points: [pt(e)] };
+      redrawMini();
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (!this.active || e.pointerId !== this.active.id) return;
+      e.preventDefault();
+      this.active.points.push(pt(e));
+      redrawMini();
+    });
+    const end = (e) => {
+      if (!this.active || e.pointerId !== this.active.id) return;
+      this.strokes.push(this.active);
+      this.active = null;
+      redrawMini();
+      // 필기를 멈추고 2.2초 동안 더 안 쓰면 자동으로 OCR 인식해 할 일로 추가
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => { if (this.strokes.length) this.recognize(); }, 2200);
+    };
+    c.addEventListener('pointerup', end);
+    c.addEventListener('pointercancel', end);
+    c.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    if ($('#day-todo-ink-clear')) $('#day-todo-ink-clear').onclick = () => this.clear();
+    if ($('#day-todo-ink-add')) $('#day-todo-ink-add').onclick = () => this.recognize();
+  },
+  clear() {
+    clearTimeout(this.timer);
+    this.strokes = [];
+    this.active = null;
+    this.redraw?.();
+  },
+  async recognize() {
+    clearTimeout(this.timer);
+    if (!this.strokes.length) return toast('먼저 아래 칸에 손글씨로 할 일을 적어 주세요');
+    if (!CFG.WORKER_URL) return toast('중계 서버가 연결되어야 손글씨 인식을 쓸 수 있어요');
+    if (!auth.connected()) return toast('먼저 구글 로그인을 해주세요');
+    const btn = $('#day-todo-ink-add');
+    if (btn) { btn.disabled = true; btn.textContent = '인식 중…'; }
+    try {
+      const fakeNote = { strokes: this.strokes.slice() };
+      const img = noteImage(fakeNote);
+      if (!img) return;
+      const data = await ocrRequest(img, state.date);
+      const lines = (data.todos && data.todos.length)
+        ? data.todos
+        : (data.text || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      if (!lines.length) return toast('글자를 인식하지 못했어요. 조금 더 크게 써 보세요.');
+      await addDayTodosFromLines(lines);
+      this.clear();
+    } catch (e) {
+      handleErr(e);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '인식해 추가'; }
+    }
+  },
+};
+
 async function renderDayEvents() {
   const ds = state.date;
   const day = parseYmd(ds);
   const list = $('#event-list');
+  renderDayTodos();
   const draw = (all) => {
     if (state.date !== ds) return;
     const evs = events.on(all, day);
     $('#events-summary').textContent = evs.length ? `일정 ${evs.length}개` : '일정';
-    $('#panel-toggle').textContent = evs.length ? `일정 ${evs.length}` : '일정';
+    updatePanelToggleLabel(evs.length);
     if (!evs.length) { list.replaceChildren(el('li', 'muted', '일정이 없어요')); return; }
     list.replaceChildren(...evs.map((ev) => {
       const li = el('li');
@@ -3160,7 +3327,10 @@ async function runOcr() {
   } finally {
     clearInterval(tick);
     btn.disabled = false;
-    if (state.date === date) renderOcr();
+    if (state.date === date) {
+      renderOcr();
+      renderDayTodos();
+    }
   }
 }
 
@@ -3236,7 +3406,10 @@ async function runRefinePage() {
     handleErr(e);
   } finally {
     btn.disabled = false;
-    if (state.date === date) renderOcr();
+    if (state.date === date) {
+      renderOcr();
+      renderDayTodos();
+    }
   }
 }
 
@@ -5210,7 +5383,18 @@ function bindPad() {
   // 시트가 열린 채로 필기장을 누르면 시트를 닫음
   $('#page-scroll').addEventListener('pointerdown', () => { if (isNarrow() && panelVisible()) setPanel(false); }, true);
 
-  // 일정 입력
+  // 하루 화면 왼쪽 패널: 할 일 입력 + 손글씨 할 일 패드 + 일정 입력
+  if ($('#day-todo-form')) {
+    $('#day-todo-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inp = $('#day-todo-input');
+      const v = inp.value.trim();
+      if (!v) return;
+      inp.value = '';
+      await addDayTodosFromLines([v]);
+    });
+  }
+  todoInk.init();
   $('#ev-allday').onchange = (e) => {
     $('#ev-times').classList.toggle('hidden', e.target.checked);
     $('.ev-end-label')?.classList.toggle('hidden', !e.target.checked);
