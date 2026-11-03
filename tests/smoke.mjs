@@ -69,7 +69,7 @@ try {
     check(`[${vp.name}] 달력 칸 필기 표시`, !!(await p.$('.cell.today .ink')));
     await p.click('[data-view=todo] >> visible=true');
     await p.waitForTimeout(600);
-    check(`[${vp.name}] 할 일 모아보기`, (await p.$$eval('#todo-items .todo-row', (r) => r.map((x) => x.textContent))).includes('보고서 제출'));
+    check(`[${vp.name}] 할 일 모아보기`, (await p.$$eval('#todo-items .todo-text', (r) => r.map((x) => x.textContent))).includes('보고서 제출'));
     await p.click('[data-view=week] >> visible=true');
     await p.waitForTimeout(400);
     check(`[${vp.name}] 주간 보기`, (await p.$$('.wcell')).length === 7);

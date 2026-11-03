@@ -225,6 +225,19 @@ const drive = {
     return out;
   },
   read(id) { return gapi(`${DRIVE}/${id}?alt=media`); },
+  // 사진·녹음 같은 파일 올리기
+  async createBinary(name, blob) {
+    const fid = await this.ensureFolder();
+    const b = 'hc' + Math.random().toString(36).slice(2);
+    const body = new Blob([
+      `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [fid] })}\r\n--${b}\r\nContent-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`,
+      blob,
+      `\r\n--${b}--`,
+    ]);
+    return gapi(`${UPLOAD}?uploadType=multipart&fields=id`, {
+      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body,
+    });
+  },
   async create(name, data) {
     const fid = await this.ensureFolder();
     const b = 'hc' + Math.random().toString(36).slice(2);
@@ -251,7 +264,13 @@ const drive = {
 const MAX_TABS = 5;
 const newPageId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 // kind: 'ink'(손글씨) 또는 'text'(키보드 메모)
-const blankPage = (kind = 'ink') => (kind === 'text' ? { id: newPageId(), kind, height: PAGE_H, strokes: [], text: '' } : { id: newPageId(), height: PAGE_H, strokes: [] });
+// kind: 없음(손글씨) / 'text'(키보드) / 'photo'(사진) / 'voice'(음성). 사진·음성은 media 목록 + 설명·받아쓴 글(text)
+const blankPage = (kind = 'ink') => {
+  const p = { id: newPageId(), height: PAGE_H, strokes: [] };
+  if (kind === 'text') Object.assign(p, { kind, text: '' });
+  if (kind === 'photo' || kind === 'voice') Object.assign(p, { kind, text: '', media: [] });
+  return p;
+};
 // 새 날짜는 키보드 메모로 시작 (버튼으로 손글씨 전환)
 const blankNote = () => ({ v: 2, pages: [blankPage('text')], updated: 0 });
 const normPage = (p, id) => ({
@@ -260,6 +279,7 @@ const normPage = (p, id) => ({
   strokes: Array.isArray(p?.strokes) ? p.strokes : [],
   ...(p?.ocr ? { ocr: p.ocr } : {}),
   ...(p?.kind === 'text' ? { kind: 'text', text: String(p.text || '') } : {}),
+  ...(p?.kind === 'photo' || p?.kind === 'voice' ? { kind: p.kind, text: String(p.text || ''), media: Array.isArray(p.media) ? p.media : [] } : {}),
 });
 // 예전 형식(탭 없이 strokes 하나)도 첫 번째 탭으로 읽음
 const normalize = (n) => ({
@@ -268,8 +288,8 @@ const normalize = (n) => ({
   updated: n?.updated || 0,
   remoteTime: n?.remoteTime,
 });
-const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length && !(p.text || '').trim());
-const cloneDoc = (doc) => ({ ...doc, pages: doc.pages.map((p) => ({ ...p, strokes: p.strokes.slice() })) });
+const docEmpty = (doc) => doc.pages.every((p) => !p.strokes.length && !(p.text || '').trim() && !p.media?.length);
+const cloneDoc = (doc) => ({ ...doc, pages: doc.pages.map((p) => ({ ...p, strokes: p.strokes.slice(), ...(p.media ? { media: p.media.map((m) => ({ ...m })) } : {}) })) });
 
 const notes = {
   localDays: new Set(),
@@ -355,7 +375,8 @@ const notes = {
         const local = raw && normalize(raw);
         const r = this.remote.get(d);
         if (local && !docEmpty(local)) {
-          const payload = { v: 2, date: d, pages: local.pages, updated: raw.updated };
+          await uploadMedia(d, raw);
+          const payload = { v: 2, date: d, pages: normalize(raw).pages, updated: raw.updated };
           const f = r ? await drive.update(r.id, payload) : await drive.create(d + '.json', payload);
           this.remote.set(d, f);
           const cur = await idb.get('note:' + d);
@@ -389,6 +410,24 @@ function scheduleFlush() {
   clearTimeout(flushTimer);
   if (auth.connected()) setStatus('saving');
   flushTimer = setTimeout(() => notes.flush(), 1500);
+}
+
+// 문서 안 사진·녹음 중 아직 드라이브에 없는 것을 올리고 driveId를 기록 (열려 있는 화면의 문서에도 반영)
+async function uploadMedia(d, raw) {
+  let changed = false;
+  for (const p of raw.pages || []) {
+    for (const m of p.media || []) {
+      if (m.driveId) continue;
+      const blob = await idb.get('blob:' + m.id).catch(() => null);
+      if (!blob) continue;
+      const ext = m.type === 'image' ? 'jpg' : (m.mime || '').includes('mp4') ? 'm4a' : 'webm';
+      const f = await drive.createBinary(`media-${d}-${m.id}.${ext}`, blob);
+      m.driveId = f.id;
+      changed = true;
+      if (state.date === d) pad.doc.pages.find((x) => x.id === p.id)?.media?.forEach((x) => { if (x.id === m.id) x.driveId = f.id; });
+    }
+  }
+  if (changed) await idb.set('note:' + d, raw);
 }
 
 // ---------- 일정
@@ -606,9 +645,56 @@ function setCalView(v) {
 function docPreview(doc) {
   return doc.pages.map((p) => {
     if (p.kind === 'text') return { kind: 'text', text: (p.text || '').trim() };
+    if (p.kind === 'photo') return p.media.length || (p.text || '').trim() ? { kind: 'text', text: `📷 사진 ${p.media.length}장${p.text ? ' · ' + p.text.trim() : ''}` } : null;
+    if (p.kind === 'voice') return p.media.length || (p.text || '').trim() ? { kind: 'text', text: (p.text || '').trim() || `🎤 녹음 ${p.media.length}개` } : null;
     if (!p.strokes.length) return null;
     return p.ocr?.text ? { kind: 'ink', text: p.ocr.text.trim(), page: p } : { kind: 'ink', text: '', page: p };
   }).filter((x) => x && (x.text || x.kind === 'ink'));
+}
+
+// 주간 시간표: 그 주 전체에서 시간 범위를 맞춰 칸끼리 줄이 맞게
+function weekTimeline(day, timed, weekEvs) {
+  const hoursOf = (e) => [e.start.getHours() + e.start.getMinutes() / 60, e.end.getHours() + e.end.getMinutes() / 60 || 24];
+  let h0 = 8, h1 = 21;
+  for (const e of weekEvs || []) {
+    if (e.allDay) continue;
+    const [a, b] = hoursOf(e);
+    h0 = Math.min(h0, Math.floor(a));
+    h1 = Math.max(h1, Math.ceil(b > a ? b : a + 1));
+  }
+  const box = el('div', 'wtime');
+  box.style.setProperty('--hours', h1 - h0);
+  for (let h = h0; h < h1; h++) {
+    const line = el('div', 'wtime-hour', `${h}`);
+    line.style.top = `calc(${h - h0} * var(--hour-h))`;
+    box.append(line);
+  }
+  // 겹치는 일정은 옆으로 나란히
+  const items = timed.map((e) => {
+    const sameDay = ymd(e.start) === ymd(day);
+    const [a0, b0] = hoursOf(e);
+    const a = sameDay ? a0 : h0, b = ymd(e.end) === ymd(day) ? Math.max(b0, a + 0.5) : h1;
+    return { e, a: Math.max(h0, a), b: Math.min(h1, Math.max(b, a + 0.5)) };
+  }).sort((x, y) => x.a - y.a);
+  const lanes = [];
+  for (const it of items) {
+    let l = lanes.findIndex((end) => end <= it.a);
+    if (l < 0) { l = lanes.length; lanes.push(0); }
+    lanes[l] = it.b;
+    it.lane = l;
+  }
+  for (const it of items) {
+    const b = el('div', 'wtime-ev', `${hm(it.e.start)} ${it.e.title}`);
+    b.title = `${hm(it.e.start)}–${hm(it.e.end)} ${it.e.title}`;
+    b.style.top = `calc(${it.a - h0} * var(--hour-h))`;
+    b.style.height = `calc(${it.b - it.a} * var(--hour-h) - 2px)`;
+    b.style.left = `calc(1.2rem + (100% - 1.2rem) * ${it.lane / lanes.length})`;
+    b.style.width = `calc((100% - 1.2rem) / ${lanes.length} - 2px)`;
+    b.style.setProperty('--c', it.e.color);
+    b.style.setProperty('--chip-text', textOn(it.e.color));
+    box.append(b);
+  }
+  return box;
 }
 
 let weekToken = 0;
@@ -624,21 +710,38 @@ async function renderWeek() {
   const today = ymd(new Date());
   const token = ++weekToken;
   const grid = $('#week-grid');
+  let maxAllday = 0;
   const cells = [];
   for (let i = 0; i < 7; i++) {
     const d = addDays(start, i), ds = ymd(d), wd = d.getDay();
     const cell = el('div', 'wcell' + (ds === today ? ' today' : ''));
     cell.dataset.date = ds;
     const head = el('div', 'whead');
-    head.append(el('span', 'wday' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''), WD[wd]), el('span', 'num' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''), String(d.getDate())));
+    const hol = holidayOn(d);
+    const red = wd === 0 || hol;
+    head.append(el('span', 'wday' + (red ? ' sun' : wd === 6 ? ' sat' : ''), WD[wd]), el('span', 'num' + (red ? ' sun' : wd === 6 ? ' sat' : ''), String(d.getDate())));
+    const lun = lunarLabel(d);
+    if (lun) head.append(el('span', 'lunar', lun));
     if (notes.has(ds)) head.append(inkIcon());
     cell.append(head);
+    if (hol) cell.append(el('div', 'hol', hol));
     if (evs) {
-      for (const ev of events.on(evs, d)) {
+      // 넓은 화면: 종일 일정은 위에, 시간 있는 일정은 시간표(8시~21시, 벗어나면 늘림)에
+      const wide = window.matchMedia('(min-width: 900px)').matches;
+      const dayEvs = events.on(evs, d);
+      // 종일 칸은 그 주에서 가장 많은 날에 맞춰 높이를 같게 (시간표 줄이 칸끼리 맞도록)
+      const allday = el('div', 'wallday');
+      for (const ev of dayEvs) {
+        if (wide && !ev.allDay) continue;
         const chip = el('div', 'chip', (ev.allDay ? '' : hm(ev.start) + ' ') + ev.title);
         chip.style.setProperty('--c', ev.color);
         chip.style.setProperty('--chip-text', textOn(ev.color));
-        cell.append(chip);
+        allday.append(chip);
+      }
+      cell.append(allday);
+      if (wide) {
+        maxAllday = Math.max(maxAllday, allday.children.length + (hol ? 1 : 0));
+        cell.append(weekTimeline(d, dayEvs.filter((e) => !e.allDay), evs));
       }
     }
     const memo = el('div', 'wmemo');
@@ -646,6 +749,7 @@ async function renderWeek() {
     cells.push({ ds, memo });
   }
   grid.replaceChildren(...cells.map((c) => c.memo.parentElement));
+  grid.style.setProperty('--allday-n', maxAllday);
   if (!evs) {
     try {
       await events.load(start, end);
@@ -724,51 +828,369 @@ function listItem(ds, prev) {
 }
 
 // ---------- 할 일 모아보기: 모든 날짜의 할 일을 체크하면 원래 메모에도 반영
-const todoState = { token: 0, showDone: store.get('todoShowDone', false) };
+// ---------- 할 일 기한 읽기: '금요일까지', '내일', '11/7', '7일까지', '3일 뒤' 등 (기준은 메모 날짜)
+const WD_CHARS = '일월화수목금토';
+function parseDue(text, base) {
+  const t = text;
+  let m;
+  const at = (d) => ymd(d);
+  if (/(^|[^가-힣])오늘/.test(t)) return at(base);
+  if (/내일/.test(t)) return at(addDays(base, 1));
+  if (/모레/.test(t)) return at(addDays(base, 2));
+  if (/글피/.test(t)) return at(addDays(base, 3));
+  if ((m = /(\d+)\s*일\s*(뒤|후)/.exec(t))) return at(addDays(base, +m[1]));
+  if ((m = /(\d{1,2})\s*[/.]\s*(\d{1,2})(?!\d)/.exec(t)) || (m = /(\d{1,2})\s*월\s*(\d{1,2})\s*일/.exec(t))) {
+    let d = new Date(base.getFullYear(), +m[1] - 1, +m[2]);
+    if (d.getMonth() !== +m[1] - 1) return null;
+    if (d < addDays(base, -60)) d = new Date(base.getFullYear() + 1, +m[1] - 1, +m[2]); // 연말에 쓴 '1/5'는 내년
+    return at(d);
+  }
+  if ((m = /(이번|다음|담|다다음)?\s*주?\s*([일월화수목금토])요일/.exec(t))) {
+    const wd = WD_CHARS.indexOf(m[2]);
+    const week = { 다음: 1, 담: 1, 다다음: 2 }[m[1]] || 0;
+    if (m[1]) return at(addDays(sundayOf(base), week * 7 + wd));
+    return at(addDays(base, (wd - base.getDay() + 7) % 7));
+  }
+  if (/월말/.test(t)) return at(new Date(base.getFullYear(), base.getMonth() + 1, 0));
+  if ((m = /(?:^|[^\d/.])(\d{1,2})\s*일\s*(까지|에|날|전)/.exec(t))) {
+    let d = new Date(base.getFullYear(), base.getMonth(), +m[1]);
+    if (d < base) d = new Date(base.getFullYear(), base.getMonth() + 1, +m[1]);
+    return at(d);
+  }
+  return null;
+}
+
+function dueLabel(due) {
+  if (!due) return '';
+  const today = ymd(new Date());
+  const diff = Math.round((parseYmd(due) - parseYmd(today)) / 86400e3);
+  if (diff < 0) return `${-diff}일 지남`;
+  if (diff === 0) return '오늘';
+  if (diff === 1) return '내일';
+  const d = parseYmd(due);
+  return `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]})`;
+}
+
+// ---------- 할 일 모아보기 (기한순 / 메모 날짜순)
+const todoState = { token: 0, showDone: store.get('todoShowDone', false), sort: store.get('todoSort', 'due') };
 async function renderTodos() {
   $('#month-title').textContent = '할 일 모아보기';
   $('#todo-show-done').checked = todoState.showDone;
+  document.querySelectorAll('#todo-sort button').forEach((b) => b.classList.toggle('active', b.dataset.sort === todoState.sort));
   const token = ++todoState.token;
   const box = $('#todo-items');
   if (!box.children.length) box.replaceChildren(el('p', 'muted-text', '불러오는 중…'));
-  const groups = [];
-  let left = 0;
+  const all = [];
   for (const ds of allNoteDates()) {
     let doc = listState.cache.get(ds);
     if (!doc) {
       try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch (e) { console.warn(e); continue; }
       if (token !== todoState.token) return;
     }
-    const all = todosOf(doc);
-    left += all.filter((t) => !t.done).length;
-    const shown = all.filter((t) => todoState.showDone || !t.done);
-    if (shown.length) groups.push({ ds, todos: shown });
+    for (const t of todosOf(doc, ds)) all.push({ ...t, ds });
   }
   if (token !== todoState.token) return;
+  const left = all.filter((t) => !t.done).length;
   $('#todo-count').textContent = `남은 할 일 ${left}개`;
-  if (!groups.length) {
-    box.replaceChildren(el('p', 'muted-text', left || todoState.showDone ? '할 일이 없어요.' : '남은 할 일이 없어요. 타자 메모에서 ☐ 버튼으로 할 일을 적거나, 손글씨로 쓰면 AI가 할 일을 찾아줘요.'));
+  const shown = all.filter((t) => todoState.showDone || !t.done);
+  if (!shown.length) {
+    box.replaceChildren(el('p', 'muted-text', left || todoState.showDone ? '할 일이 없어요.' : "남은 할 일이 없어요. 메모에서 [] + 스페이스로 할 일을 적거나, 손글씨로 쓰면 AI가 찾아줘요. '금요일까지'처럼 쓰면 기한도 잡아요."));
     return;
   }
-  box.replaceChildren(...groups.map(({ ds, todos }) => {
-    const d = parseYmd(ds);
+  const row = (t) => {
+    const r = el('label', 'todo-row' + (t.done ? ' done' : ''));
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = t.done;
+    cb.onchange = () => toggleTodo(t.ds, t, cb.checked, r);
+    r.append(cb, el('span', 'todo-text', t.text));
+    if (t.due) r.append(el('span', 'todo-due' + (t.due < ymd(new Date()) && !t.done ? ' over' : ''), dueLabel(t.due)));
+    if (t.kind === 'ocr') r.append(icon('pen', 'ic todo-src'));
+    const go = el('button', 'todo-go', `${parseYmd(t.ds).getMonth() + 1}/${parseYmd(t.ds).getDate()}`);
+    go.title = '메모 열기';
+    go.onclick = (e) => { e.preventDefault(); openDay(t.ds); };
+    r.append(go);
+    return r;
+  };
+  const section = (title, items, ds) => {
     const sec = el('section', 'todo-group');
-    const head = el('button', 'todo-date', `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`);
-    head.title = '이 날짜 열기';
-    head.onclick = () => openDay(ds);
-    sec.append(head);
-    for (const t of todos) {
-      const row = el('label', 'todo-row' + (t.done ? ' done' : ''));
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.checked = t.done;
-      cb.onchange = () => toggleTodo(ds, t, cb.checked, row);
-      row.append(cb, el('span', 'todo-text', t.text));
-      if (t.kind === 'ocr') row.append(el('span', 'todo-src', '✍'));
-      sec.append(row);
-    }
+    const head = el('button', 'todo-date', title);
+    if (ds) { head.title = '이 날짜 열기'; head.onclick = () => openDay(ds); }
+    sec.append(head, ...items.map(row));
     return sec;
+  };
+  if (todoState.sort === 'due') {
+    // 기한별 묶음: 지남 · 오늘 · 내일 · 이번 주 · 나중 · 기한 없음 (기한 없으면 메모 날짜 최신순)
+    const today = ymd(new Date()), tomorrow = ymd(addDays(new Date(), 1)), weekEnd = ymd(addDays(sundayOf(new Date()), 6));
+    const buckets = [['지남', []], ['오늘', []], ['내일', []], ['이번 주', []], ['나중', []], ['기한 없음', []]];
+    for (const t of shown) {
+      const d = t.due;
+      const i = !d ? 5 : d < today ? 0 : d === today ? 1 : d === tomorrow ? 2 : d <= weekEnd ? 3 : 4;
+      buckets[i][1].push(t);
+    }
+    for (const [, items] of buckets) items.sort((a, b) => (a.due || '').localeCompare(b.due || '') || b.ds.localeCompare(a.ds));
+    box.replaceChildren(...buckets.filter(([, it]) => it.length).map(([title, it]) => section(`${title} · ${it.length}`, it)));
+  } else {
+    const byDate = new Map();
+    for (const t of shown) { if (!byDate.has(t.ds)) byDate.set(t.ds, []); byDate.get(t.ds).push(t); }
+    box.replaceChildren(...[...byDate].map(([ds, it]) => {
+      const d = parseYmd(ds);
+      return section(`${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`, it, ds);
+    }));
+  }
+}
+
+// 날짜별 미리보기 색인 (4단계에서 드라이브 index.json으로 확장)
+const noteIndex = { doc: () => null };
+
+// ---------- 음력·공휴일 (브라우저 내장 한국 음력 '단기' 달력 사용)
+const lunarFmt = (() => {
+  try { return new Intl.DateTimeFormat('ko-KR-u-ca-dangi', { month: 'numeric', day: 'numeric' }); } catch { return null; }
+})();
+const lunarCache = new Map();
+function lunarOf(d) {
+  const k = ymd(d);
+  if (lunarCache.has(k)) return lunarCache.get(k);
+  let v = null;
+  if (lunarFmt) {
+    const parts = lunarFmt.formatToParts(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12));
+    const mon = parts.find((p) => p.type === 'month')?.value || '';
+    const day = parts.find((p) => p.type === 'day')?.value;
+    v = { leap: /윤|bis/.test(mon), m: parseInt(mon.replace(/\D/g, ''), 10), d: parseInt(day, 10) };
+  }
+  lunarCache.set(k, v);
+  return v;
+}
+
+const holidayCache = new Map();
+function holidaysOf(y) {
+  if (holidayCache.has(y)) return holidayCache.get(y);
+  const h = new Map();
+  const set = (d, name) => h.set(ymd(d), h.has(ymd(d)) ? h.get(ymd(d)) + '·' + name : name);
+  const solar = [[1, 1, '신정'], [3, 1, '삼일절'], [5, 5, '어린이날'], [6, 6, '현충일'], [8, 15, '광복절'], [10, 3, '개천절'], [10, 9, '한글날'], [12, 25, '성탄절']];
+  for (const [mm, dd, name] of solar) set(new Date(y, mm - 1, dd), name);
+  // 음력 공휴일: 설날(전날·당일·다음날), 부처님오신날, 추석(전날·당일·다음날)
+  const lunarDays = [];
+  if (lunarFmt) {
+    for (let d = new Date(y, 0, 1); d.getFullYear() === y; d = addDays(d, 1)) {
+      const l = lunarOf(d);
+      if (!l || l.leap) continue;
+      if (l.m === 1 && l.d === 1) lunarDays.push(['설날', d]);
+      if (l.m === 4 && l.d === 8) set(d, '부처님오신날');
+      if (l.m === 8 && l.d === 15) lunarDays.push(['추석', d]);
+    }
+  }
+  const blocks = [];
+  for (const [name, d] of lunarDays) {
+    const days = [addDays(d, -1), d, addDays(d, 1)];
+    days.forEach((x, i) => set(x, i === 1 ? name : `${name} 연휴`));
+    blocks.push(days);
+  }
+  // 대체공휴일: 설·추석 연휴가 일요일(또는 다른 공휴일)과 겹치면, 어린이날·국경일·부처님오신날·성탄절은 토·일과 겹치면 다음 평일
+  const isOff = (d) => d.getDay() === 0 || d.getDay() === 6 || h.has(ymd(d));
+  const nextFree = (d) => { let x = addDays(d, 1); while (isOff(x)) x = addDays(x, 1); return x; };
+  for (const days of blocks) {
+    const overlap = days.filter((x) => x.getDay() === 0 || solar.some(([mm, dd]) => x.getMonth() === mm - 1 && x.getDate() === dd)).length;
+    let last = days[2];
+    for (let i = 0; i < overlap; i++) { last = nextFree(last); set(last, '대체공휴일'); }
+  }
+  const weekendRule = [[3, 1], [5, 5], [8, 15], [10, 3], [10, 9], [12, 25]].map(([mm, dd]) => new Date(y, mm - 1, dd));
+  for (const [k, name] of [...h]) if (name.includes('부처님오신날')) weekendRule.push(parseYmd(k));
+  for (const d of weekendRule) {
+    const wknd = d.getDay() === 0 || d.getDay() === 6;
+    const clash = (h.get(ymd(d)) || '').includes('·');
+    if (wknd || clash) set(nextFree(d), '대체공휴일');
+  }
+  holidayCache.set(y, h);
+  return h;
+}
+const holidayOn = (d) => holidaysOf(d.getFullYear()).get(ymd(d)) || null;
+
+function lunarLabel(d) {
+  const mode = store.get('lunar', 'key');
+  if (mode === 'off') return '';
+  const l = lunarOf(d);
+  if (!l) return '';
+  if (mode === 'key' && l.d !== 1 && l.d !== 15) return '';
+  return `${l.leap ? '윤' : ''}${l.m}.${l.d}`;
+}
+
+// ---------- 전체 검색: 메모·변환된 손글씨·할 일·일정
+const searchState = { token: 0, events: null };
+function openSearch() {
+  $('#search-ov').classList.remove('hidden');
+  $('#search-input').value = '';
+  $('#search-results').replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목에서 찾아요.'));
+  setTimeout(() => $('#search-input').focus(), 30);
+  // 일정은 앞뒤 6개월치를 한 번 불러둠
+  if (!searchState.events) {
+    const s = addDays(new Date(), -183), e = addDays(new Date(), 183);
+    events.load(s, e).then((list) => { searchState.events = list; }).catch(() => { searchState.events = []; });
+  }
+}
+
+function markText(text, q) {
+  const span = el('span');
+  const lower = text.toLowerCase();
+  let i = 0, j;
+  while ((j = lower.indexOf(q, i)) >= 0) {
+    span.append(document.createTextNode(text.slice(i, j)), el('mark', null, text.slice(j, j + q.length)));
+    i = j + q.length;
+  }
+  span.append(document.createTextNode(text.slice(i)));
+  return span;
+}
+
+async function runSearch() {
+  const q = $('#search-input').value.trim().toLowerCase();
+  const box = $('#search-results');
+  const token = ++searchState.token;
+  if (!q) { box.replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목에서 찾아요.')); return; }
+  const hits = [];
+  const dates = allNoteDates();
+  box.replaceChildren(el('p', 'muted-text', `찾는 중… (0/${dates.length})`));
+  let n = 0;
+  for (const ds of dates) {
+    let doc = listState.cache.get(ds) || noteIndex.doc(ds);
+    if (!doc) {
+      try { doc = await notes.get(ds); listState.cache.set(ds, doc); } catch { continue; }
+      if (token !== searchState.token) return;
+    }
+    if (++n % 20 === 0) box.firstChild && (box.firstChild.textContent = `찾는 중… (${n}/${dates.length})`);
+    for (const p of doc.pages) {
+      const txt = p.kind === 'text' || p.kind === 'voice' ? p.text || '' : p.kind === 'photo' ? '' : p.ocr?.text || '';
+      for (const line of txt.split('\n')) {
+        if (!line.toLowerCase().includes(q)) continue;
+        const isTodo = TODO_RE.test(line);
+        hits.push({ ds, type: isTodo ? '할 일' : p.kind === 'text' ? '메모' : p.kind === 'voice' ? '음성' : '손글씨', text: line.replace(TODO_RE, '$3').trim() });
+      }
+    }
+  }
+  for (const ev of [...(searchState.events || []), ...memos.visible(new Date(2000, 0, 1), new Date(2100, 0, 1))]) {
+    if (ev.title.toLowerCase().includes(q)) hits.push({ ds: ymd(ev.start), type: '일정', text: (ev.allDay ? '' : hm(ev.start) + ' ') + ev.title });
+  }
+  if (token !== searchState.token) return;
+  const seen = new Set();
+  const uniq = hits.filter((h) => { const k = h.ds + h.type + h.text; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => b.ds.localeCompare(a.ds)).slice(0, 150);
+  if (!uniq.length) { box.replaceChildren(el('p', 'muted-text', '찾는 내용이 없어요.')); return; }
+  box.replaceChildren(el('p', 'muted-text', `${uniq.length}개 찾음`), ...uniq.map((h) => {
+    const d = parseYmd(h.ds);
+    const b = el('button', 'search-hit');
+    b.append(el('span', 'search-date', `${d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '. '}${d.getMonth() + 1}/${d.getDate()} (${WD[d.getDay()]})`), el('span', 'search-type', h.type), markText(h.text, q));
+    b.onclick = () => { $('#search-ov').classList.add('hidden'); openDay(h.ds); };
+    return b;
   }));
+}
+
+// ---------- 내보내기: 마크다운 파일 / PDF(인쇄) / 공유
+function openExport() {
+  const today = new Date();
+  const from = el('input'); from.type = 'date';
+  const to = el('input'); to.type = 'date';
+  const setRange = (a, b) => { from.value = ymd(a); to.value = ymd(b); };
+  const base = state.view === 'day' && state.date ? parseYmd(state.date) : today;
+  setRange(base, base);
+  const quick = el('div', 'settings-btns');
+  for (const [label, fn] of [
+    ['이 날짜', () => setRange(base, base)],
+    ['이번 주', () => setRange(sundayOf(base), addDays(sundayOf(base), 6))],
+    ['이번 달', () => setRange(new Date(base.getFullYear(), base.getMonth(), 1), new Date(base.getFullYear(), base.getMonth() + 1, 0))],
+  ]) { const b = el('button', 'pill', label); b.onclick = fn; quick.append(b); }
+  const range = el('div', 'export-range');
+  range.append(from, el('span', null, '~'), to);
+  const acts = el('div', 'settings-btns');
+  const mk = (label, cls, fn) => { const b = el('button', 'pill ' + cls, label); b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { handleErr(e); } finally { b.disabled = false; } }; acts.append(b); };
+  mk('마크다운 저장', 'primary', () => exportRange(from.value, to.value, 'md'));
+  mk('PDF로 인쇄·저장', '', () => exportRange(from.value, to.value, 'pdf'));
+  if (navigator.share) mk('공유', '', () => exportRange(from.value, to.value, 'share'));
+  openModal('내보내기', [el('p', 'muted-text', '메모·변환된 손글씨·할 일·일정을 한 파일로 모아요. 손글씨와 사진은 그림으로 들어가요.'), quick, range, acts]);
+}
+
+async function collectExport(fromDs, toDs) {
+  if (!fromDs || !toDs || fromDs > toDs) throw new Error('기간을 확인해 주세요');
+  const days = [];
+  const evs = await events.load(parseYmd(fromDs), addDays(parseYmd(toDs), 1)).catch(() => []);
+  for (let d = parseYmd(fromDs); ymd(d) <= toDs; d = addDays(d, 1)) {
+    const ds = ymd(d);
+    const dayEvs = events.on(evs, d);
+    const doc = notes.has(ds) ? await notes.get(ds) : null;
+    if (!dayEvs.length && !doc) continue;
+    const blocks = [];
+    for (const p of doc?.pages || []) {
+      if (p.kind === 'text' && (p.text || '').trim()) blocks.push({ type: 'text', text: p.text.trim() });
+      else if (p.kind === 'voice') { if ((p.text || '').trim()) blocks.push({ type: 'text', label: '음성 메모', text: p.text.trim() }); }
+      else if (p.kind === 'photo') { for (const m of p.media || []) { const url = await mediaDataUrl(m).catch(() => null); if (url) blocks.push({ type: 'img', url, label: '사진' }); } }
+      else if (p.strokes.length) {
+        const wasDark = darkInk;
+        blocks.push({ type: 'img', url: 'data:image/png;base64,' + noteImage(p), label: '손글씨' });
+        darkInk = wasDark;
+        if (p.ocr?.text) blocks.push({ type: 'text', label: '손글씨를 글자로', text: p.ocr.text.trim() });
+      }
+    }
+    days.push({ ds, d, evs: dayEvs, blocks });
+  }
+  return days;
+}
+
+function exportMarkdown(days) {
+  const out = [];
+  for (const { d, evs, blocks } of days) {
+    out.push(`## ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} (${WD[d.getDay()]})`, '');
+    if (evs.length) { out.push('**일정**'); for (const e of evs) out.push(`- ${e.allDay ? '종일' : hm(e.start)} ${e.title}`); out.push(''); }
+    for (const b of blocks) {
+      if (b.label) out.push(`**${b.label}**`);
+      if (b.type === 'img') out.push(`![${b.label}](${b.url})`);
+      else out.push(b.text.replace(/^☐ /gm, '- [ ] ').replace(/^☑ /gm, '- [x] '));
+      out.push('');
+    }
+  }
+  return out.join('\n');
+}
+
+function exportHtml(days, title) {
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const body = days.map(({ d, evs, blocks }) => `<section><h2>${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})</h2>` +
+    (evs.length ? `<ul class="ev">${evs.map((e) => `<li>${e.allDay ? '종일' : hm(e.start)} ${esc(e.title)}</li>`).join('')}</ul>` : '') +
+    blocks.map((b) => (b.label ? `<h3>${esc(b.label)}</h3>` : '') + (b.type === 'img' ? `<img src="${b.url}">` : `<pre>${esc(b.text)}</pre>`)).join('') + '</section>').join('');
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+body{font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;color:#1f2328;margin:24px}
+h1{font-size:20px}h2{font-size:16px;border-bottom:1px solid #ddd;padding-bottom:4px;margin-top:24px}h3{font-size:13px;color:#555;margin:10px 0 4px}
+pre{white-space:pre-wrap;font:inherit;margin:0}img{max-width:100%;max-height:420px;border:1px solid #eee;border-radius:6px}
+.ev{margin:4px 0 8px;padding-left:18px;color:#444}section{break-inside:avoid-page}</style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
+}
+
+async function exportRange(fromDs, toDs, how) {
+  const days = await collectExport(fromDs, toDs);
+  if (!days.length) return toast('그 기간에는 메모·일정이 없어요');
+  const title = fromDs === toDs ? `필기캘린더 ${fromDs}` : `필기캘린더 ${fromDs} ~ ${toDs}`;
+  if (how === 'pdf') {
+    // 숨긴 틀에 그려서 인쇄 창 → 'PDF로 저장' 선택
+    const f = el('iframe');
+    f.style.cssText = 'position:fixed;width:0;height:0;border:0;right:0;bottom:0';
+    document.body.append(f);
+    f.contentDocument.open();
+    f.contentDocument.write(exportHtml(days, title));
+    f.contentDocument.close();
+    await new Promise((r) => setTimeout(r, 400));
+    f.contentWindow.focus();
+    f.contentWindow.print();
+    setTimeout(() => f.remove(), 60000);
+    return;
+  }
+  const md = `# ${title}\n\n` + exportMarkdown(days);
+  const file = new File([md], `${title.replace(/[\s~]+/g, '_')}.md`, { type: 'text/markdown' });
+  if (how === 'share' && navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ files: [file], title });
+    return;
+  }
+  const a = el('a');
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast('파일로 저장했어요');
 }
 
 async function toggleTodo(ds, t, done, row) {
@@ -910,9 +1332,16 @@ async function renderMonthView() {
     if (ds === today) cell.classList.add('today');
     cell.dataset.date = ds;
     const head = el('div', 'cell-head');
-    head.append(el('span', 'num' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''), String(d.getDate())));
+    const hol = holidayOn(d);
+    head.append(el('span', 'num' + (wd === 0 || hol ? ' sun' : wd === 6 ? ' sat' : ''), String(d.getDate())));
+    const lun = lunarLabel(d);
+    if (lun) head.append(el('span', 'lunar', lun));
     if (notes.has(ds)) head.append(inkIcon());
     cell.append(head);
+    // 공휴일 이름 (네이버 일정에 같은 이름이 있으면 생략)
+    if (hol && !(evs && events.on(evs, d).some((e) => hol.split('·').some((h) => e.title.includes(h.replace(' 연휴', '')))))) {
+      cell.append(el('div', 'hol', hol));
+    }
     if (evs) {
       const { lanes, visible } = weekLayouts[Math.floor(i / 7)];
       const col = i % 7;
@@ -1020,8 +1449,25 @@ const pad = {
 };
 
 function layoutPad() {
-  const isText = pad.note.kind === 'text';
+  const kind = pad.note.kind;
+  const isMedia = kind === 'photo' || kind === 'voice';
+  const isText = kind === 'text';
   const ta = $('#text-page');
+  $('#media-page').classList.toggle('hidden', !isMedia);
+  if (isMedia) {
+    $('#day-view').classList.add('text-mode');
+    $('.page-wrap').classList.add('hidden');
+    $('#add-page').classList.add('hidden');
+    ta.classList.add('hidden');
+    $('#text-todos').classList.add('hidden');
+    ta.dataset.pageId = '';
+    if ($('#media-page').dataset.pageId !== pad.note.id || !$('#media-page').children.length) {
+      $('#media-page').dataset.pageId = pad.note.id;
+      renderMediaPage();
+    }
+    return;
+  }
+  $('#media-page').dataset.pageId = '';
   $('#day-view').classList.toggle('text-mode', isText);
   $('.page-wrap').classList.toggle('hidden', isText);
   $('#add-page').classList.toggle('hidden', isText);
@@ -1445,6 +1891,7 @@ async function openDay(ds, { push = true } = {}) {
   state.date = ds;
   if (push) history[fromMonth ? 'pushState' : 'replaceState']({ day: ds }, '', '#' + ds);
   document.body.classList.add('in-day');
+  $('#day-menu-btn').classList.remove('hidden');
   hideMenu();
   $('#month-view').classList.add('hidden');
   $('#month-nav').classList.add('hidden');
@@ -1491,6 +1938,7 @@ async function openDay(ds, { push = true } = {}) {
 async function closeDay() {
   await saveNow();
   document.body.classList.remove('in-day');
+  $('#day-menu-btn').classList.add('hidden');
   autoOcr.hurry(state.date);
   dayToken++;
   const d = parseYmd(state.date);
@@ -1509,6 +1957,8 @@ async function closeDay() {
 
 // ---------- 필기 탭
 function tabLabel(page, i) {
+  if (page.kind === 'photo') return (firstLine(page.text) || `사진 ${page.media.length || ''}`).slice(0, 10).trim();
+  if (page.kind === 'voice') return (firstLine(page.text) || `음성 ${i + 1}`).slice(0, 10);
   if (page.kind === 'text') {
     const first = firstLine(page.text);
     return first ? first.slice(0, 10) : `메모 ${i + 1}`;
@@ -1592,6 +2042,7 @@ function addPage(kind = 'text') {
 function toggleKind() {
   if (pad.loading || pad.active) return;
   const cur = pad.note, toInk = cur.kind === 'text';
+  if (cur.kind === 'photo' || cur.kind === 'voice') return addPage('text'); // 사진·녹음은 그대로 두고 새 타자 탭
   const empty = toInk ? !(cur.text || '').trim() : !cur.strokes.length;
   if (!empty) return addPage(toInk ? 'ink' : 'text');
   if (toInk) { delete cur.kind; delete cur.text; }
@@ -1787,16 +2238,18 @@ const docNeedsOcr = (doc) => doc.pages.some(needsOcr);
 const firstLine = (t) => (t || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
 // 할 일: 타자 메모에서 ☐/[ ]로 시작하는 줄(☑/[x]는 완료) + 손글씨 AI가 뽑은 할 일
 const TODO_RE = /^(\s*(?:[-*•]\s*)?)(\[[ xX]\]|☐|☑|□|✅)\s*(.*)$/;
-function todosOf(doc) {
+// ds(메모 날짜)를 주면 글에서 기한도 읽음
+function todosOf(doc, ds) {
   const out = [];
+  const base = ds ? parseYmd(ds) : null;
   for (const p of doc.pages) {
-    if (p.kind === 'text') {
+    if (p.kind === 'text' || p.kind === 'voice') {
       (p.text || '').split('\n').forEach((line, li) => {
         const m = TODO_RE.exec(line);
-        if (m && m[3].trim()) out.push({ pageId: p.id, kind: 'text', line: li, text: m[3].trim(), done: /[xX☑✅]/.test(m[2]) });
+        if (m && m[3].trim()) out.push({ pageId: p.id, kind: 'text', line: li, text: m[3].trim(), done: /[xX☑✅]/.test(m[2]), due: base && parseDue(m[3], base) });
       });
     } else if (p.ocr?.todos?.length && p.strokes.length) {
-      p.ocr.todos.forEach((t, i) => out.push({ pageId: p.id, kind: 'ocr', idx: i, text: t, done: !!p.ocr.done?.[i] }));
+      p.ocr.todos.forEach((t, i) => out.push({ pageId: p.id, kind: 'ocr', idx: i, text: t, done: !!p.ocr.done?.[i], due: base && parseDue(t, base) }));
     }
   }
   return out;
@@ -1822,7 +2275,10 @@ function setTodoDone(doc, t, done) {
 function digestOf(doc) {
   const parts = [];
   for (const p of doc.pages) {
-    if (p.kind === 'text') {
+    if (p.kind === 'photo' || p.kind === 'voice') {
+      const line = firstLine(p.text) || (p.media.length ? (p.kind === 'photo' ? `사진 ${p.media.length}장` : `녹음 ${p.media.length}개`) : '');
+      if (line) parts.push(line.slice(0, 80));
+    } else if (p.kind === 'text') {
       const line = firstLine(p.text).replace(TODO_RE, '$3').trim();
       if (line) parts.push(line.slice(0, 80));
     } else if (p.ocr && p.strokes.length) parts.push(digestLine(p.ocr));
@@ -2405,7 +2861,7 @@ const gtasks = {
       const doc = open ? pad.doc : await notes.get(ds);
       const seen = new Set();
       let docChanged = false;
-      for (const t of todosOf(doc)) {
+      for (const t of todosOf(doc, ds)) {
         const k = this.key(ds, t);
         if (seen.has(k)) continue;
         seen.add(k);
@@ -2422,12 +2878,17 @@ const gtasks = {
           const created = await this.api(`/lists/${this.listId}/tasks`, { method: 'POST', body: JSON.stringify({
             title: t.text,
             notes: `필기캘린더 ${d.getMonth() + 1}월 ${d.getDate()}일 메모`,
-            due: `${ds}T00:00:00.000Z`,
+            due: `${t.due || ds}T00:00:00.000Z`,
             status: t.done ? 'completed' : 'needsAction',
           }) });
           usedIds.add(created.id);
           this.setEntry(k, { id: created.id, done: t.done });
           continue;
+        }
+        // 기한을 고쳐 썼으면 Tasks 마감일도 맞춤 (가져온 작업은 원래 마감일 유지)
+        const wantDue = t.due || ds;
+        if (task._list === this.listId && (task.due || '').slice(0, 10) !== wantDue) {
+          await this.api(`/lists/${task._list}/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ due: `${wantDue}T00:00:00.000Z` }) });
         }
         const gDone = task.status === 'completed';
         const last = e.done;
@@ -2487,6 +2948,256 @@ function renderTasksStatus() {
     : gtasks.problem === 'scope' ? 'Tasks 권한이 필요해요. 아래 버튼으로 다시 연결해 주세요'
     : gtasks.lastSync ? `Tasks '${TASKLIST_TITLE}' 목록과 연동됨 · ${hm(new Date(gtasks.lastSync))}`
     : '연동 준비 중…';
+}
+
+// ---------- 사진·음성 메모 (탭 종류 'photo', 'voice')
+// 파일은 기기 IndexedDB('blob:id')에 먼저 두고, 동기화할 때 드라이브 '필기캘린더' 폴더에 올려 driveId를 기록
+const mediaUrls = new Map(); // media id → 화면용 주소
+async function mediaBlob(m) {
+  let blob = await idb.get('blob:' + m.id).catch(() => null);
+  if (!blob && m.driveId && auth.connected()) {
+    const res = await authFetch(`${DRIVE}/${m.driveId}?alt=media`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    blob = await res.blob();
+    await idb.set('blob:' + m.id, blob);
+  }
+  return blob;
+}
+async function mediaUrl(m) {
+  if (mediaUrls.has(m.id)) return mediaUrls.get(m.id);
+  const blob = await mediaBlob(m);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  mediaUrls.set(m.id, url);
+  return url;
+}
+async function mediaDataUrl(m) {
+  const blob = await mediaBlob(m);
+  if (!blob) return null;
+  return new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+}
+
+// 사진은 긴 쪽 1600px JPEG로 줄여 저장 (용량 절약)
+async function shrinkImage(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k);
+  c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+  return { blob, w: c.width, h: c.height };
+}
+
+async function addPhotos(page, files) {
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    try {
+      const { blob, w, h } = await shrinkImage(f);
+      const m = { id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type: 'image', mime: 'image/jpeg', w, h };
+      await idb.set('blob:' + m.id, blob);
+      page.media.push(m);
+    } catch (e) { console.warn(e); toast('사진을 읽지 못했어요'); }
+  }
+}
+
+// 녹음 → 16kHz 모노 WAV로 바꿔서 중계 서버 Gemini로 받아쓰기 (최대 6분)
+async function toWav16k(blob, maxSec = 360) {
+  const buf = await blob.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const audio = await ctx.decodeAudioData(buf);
+  ctx.close?.();
+  const sec = Math.min(audio.duration, maxSec);
+  const off = new OfflineAudioContext(1, Math.ceil(sec * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = audio;
+  src.connect(off.destination);
+  src.start(0);
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const w = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); out.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, 16000, true); out.setUint32(28, 32000, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+  w(36, 'data'); out.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  return { wav: new Blob([out], { type: 'audio/wav' }), cut: audio.duration > maxSec };
+}
+const blobToB64 = (b) => new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.readAsDataURL(b); });
+
+async function transcribeInto(date, pageId, m) {
+  if (!CFG.WORKER_URL || !auth.connected()) return toast('음성을 글자로 바꾸려면 구글 로그인과 중계 서버가 필요해요');
+  const status = $('#voice-status');
+  if (status) status.textContent = '글자로 바꾸는 중…';
+  try {
+    const { wav, cut } = await toWav16k(await mediaBlob(m));
+    const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: await blobToB64(wav), mime: 'audio/wav', date }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.message || 'HTTP ' + res.status), { code: data.error });
+    // 받아쓴 글 + 찾은 할 일(☐)을 이 탭 글에 덧붙임
+    const add = [data.text.trim(), ...(data.todos || []).map((t) => '☐ ' + t)].filter(Boolean).join('\n');
+    const open = state.view === 'day' && state.date === date;
+    const doc = open ? pad.doc : await notes.get(date);
+    const page = doc.pages.find((p) => p.id === pageId);
+    if (!page) return;
+    page.text = (page.text ? page.text.replace(/\n*$/, '\n\n') : '') + add;
+    m.transcribed = true;
+    const pm = page.media.find((x) => x.id === m.id);
+    if (pm) pm.transcribed = true;
+    if (open) { saveSoon(); if (pad.note.id === pageId) renderMediaPage(); renderTabs(); }
+    else await notes.put(date, cloneDoc(doc));
+    refreshDigest(date, doc);
+    if (cut) toast('6분이 넘는 녹음은 앞 6분만 글자로 바꿨어요', 5000);
+  } catch (e) {
+    handleErr(e);
+  } finally {
+    const st = $('#voice-status');
+    if (st) st.textContent = '';
+  }
+}
+
+const recorder = { rec: null, chunks: [], started: 0, timer: null };
+async function toggleRecord() {
+  const page = pad.note;
+  if (recorder.rec) { recorder.rec.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { return toast('마이크를 쓸 수 없어요. 브라우저 설정에서 마이크를 허용해 주세요', 5000); }
+  const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  recorder.rec = rec;
+  recorder.chunks = [];
+  recorder.started = Date.now();
+  rec.ondataavailable = (e) => { if (e.data.size) recorder.chunks.push(e.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    clearInterval(recorder.timer);
+    const blob = new Blob(recorder.chunks, { type: rec.mimeType || 'audio/webm' });
+    const dur = Math.round((Date.now() - recorder.started) / 1000);
+    recorder.rec = null;
+    const m = { id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type: 'audio', mime: blob.type, dur };
+    await idb.set('blob:' + m.id, blob);
+    page.media.push(m);
+    saveSoon();
+    renderMediaPage();
+    renderTabs();
+    transcribeInto(state.date, page.id, m);
+  };
+  rec.start(1000);
+  recorder.timer = setInterval(() => {
+    const s = Math.round((Date.now() - recorder.started) / 1000);
+    const b = $('#rec-btn');
+    if (b) b.textContent = `■ 멈추기 ${Math.floor(s / 60)}:${pad2(s % 60)}`;
+  }, 500);
+  renderMediaPage();
+}
+
+function renderMediaPage() {
+  const box = $('#media-page');
+  const page = pad.note;
+  const date = state.date;
+  const items = [];
+  if (page.kind === 'photo') {
+    const bar = el('div', 'media-bar');
+    const pick = el('label', 'pill primary media-pick');
+    const input = el('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = true;
+    input.onchange = async () => { await addPhotos(page, [...input.files]); saveSoon(); renderMediaPage(); renderTabs(); };
+    pick.append(icon('photo'), el('span', null, '사진 찍기·고르기'), input);
+    bar.append(pick);
+    items.push(bar);
+    const grid = el('div', 'photo-grid');
+    for (const m of page.media) {
+      const fig = el('figure', 'photo');
+      const img = el('img');
+      img.alt = '사진';
+      if (m.w && m.h) img.style.aspectRatio = `${m.w} / ${m.h}`;
+      mediaUrl(m).then((u) => { if (u) img.src = u; }).catch(() => { img.alt = '사진을 불러오지 못했어요'; });
+      img.onclick = () => mediaUrl(m).then((u) => u && openModal('사진', [Object.assign(el('img', 'photo-full'), { src: u })]));
+      const del = el('button', 'photo-del', '✕');
+      del.setAttribute('aria-label', '사진 지우기');
+      del.onclick = () => {
+        if (!confirm('이 사진을 지울까요?')) return;
+        page.media = page.media.filter((x) => x !== m);
+        saveSoon();
+        renderMediaPage();
+      };
+      fig.append(img, del);
+      grid.append(fig);
+    }
+    if (page.media.length) items.push(grid);
+    else items.push(el('p', 'muted-text', '사진을 찍거나 앨범에서 골라 넣으세요. 다른 앱에서 "공유 → 필기캘린더"로도 넣을 수 있어요(안드로이드).'));
+  } else {
+    const bar = el('div', 'media-bar');
+    const rec = el('button', 'pill ' + (recorder.rec ? 'danger' : 'primary'), recorder.rec ? '■ 멈추기' : '● 녹음 시작');
+    rec.id = 'rec-btn';
+    rec.onclick = toggleRecord;
+    bar.append(rec, Object.assign(el('span', 'muted-text'), { id: 'voice-status' }));
+    items.push(bar);
+    for (const m of page.media) {
+      const row = el('div', 'voice-row');
+      const audio = el('audio');
+      audio.controls = true;
+      audio.preload = 'none';
+      mediaUrl(m).then((u) => { if (u) audio.src = u; }).catch(() => {});
+      row.append(audio, el('span', 'muted-text', m.dur ? `${Math.floor(m.dur / 60)}:${pad2(m.dur % 60)}` : ''));
+      if (!m.transcribed) {
+        const again = el('button', 'pill', '글자로 바꾸기');
+        again.onclick = () => transcribeInto(date, page.id, m);
+        row.append(again);
+      }
+      items.push(row);
+    }
+    if (!page.media.length) items.push(el('p', 'muted-text', '녹음하면 AI가 받아 적고, 말한 할 일은 ☐로 넣어요. (구글 로그인·중계 서버 필요)'));
+  }
+  // 사진 설명·받아쓴 글 (검색·요약·할 일에 쓰임)
+  const ta = el('textarea', 'media-text');
+  ta.placeholder = page.kind === 'photo' ? '사진 설명 (검색에 쓰여요)' : '받아쓴 글 (직접 고칠 수 있어요)';
+  ta.value = page.text || '';
+  ta.rows = page.kind === 'photo' ? 3 : 10;
+  ta.oninput = () => { page.text = ta.value; saveSoon(); };
+  items.push(ta);
+  box.replaceChildren(...items);
+}
+
+// 안드로이드 '공유 → 필기캘린더'로 받은 글·링크·사진을 오늘 메모에 넣음 (sw.js가 share-inbox 캐시에 보관)
+async function takeShared(flag) {
+  if (!flag || !('caches' in window)) return false;
+  const cache = await caches.open('share-inbox');
+  const metaRes = await cache.match('./share-meta');
+  if (!metaRes) return false;
+  const meta = await metaRes.json();
+  const ds = ymd(new Date());
+  const doc = await notes.get(ds);
+  const text = [meta.title, meta.text, meta.url].filter(Boolean).join('\n').trim();
+  if (text) {
+    let page = doc.pages.find((p) => p.kind === 'text');
+    if (!page) { page = blankPage('text'); if (doc.pages.length < MAX_TABS) doc.pages.push(page); }
+    page.text = (page.text ? page.text.replace(/\n*$/, '\n\n') : '') + text;
+  }
+  const files = [];
+  for (const f of meta.files || []) {
+    const r = await cache.match(f.key);
+    if (r) files.push(new File([await r.blob()], f.name || 'photo', { type: f.type }));
+    await cache.delete(f.key);
+  }
+  if (files.length) {
+    let page = doc.pages.find((p) => p.kind === 'photo');
+    if (!page && doc.pages.length < MAX_TABS) { page = blankPage('photo'); doc.pages.push(page); }
+    if (page) await addPhotos(page, files);
+  }
+  await cache.delete('./share-meta');
+  await notes.put(ds, cloneDoc(doc));
+  refreshDigest(ds, doc);
+  toast('공유받은 내용을 오늘 메모에 넣었어요');
+  await openDay(ds, { push: true });
+  return true;
 }
 
 // ---------- 드라이브에 JSON 하나를 두고 항목별로 더 최근 것을 합치는 저장소 (휴지통·서식·색인)
@@ -2643,7 +3354,7 @@ function openInkTab() {
   else if (cur.kind) addPage('ink');
 }
 
-const READY = { media: false };
+const READY = { media: true };
 function dayActions(ds) {
   return [
     { label: '할 일 추가', icon: 'check', keepOpen: true, fn: () => showMenu(null, [{ input: { placeholder: "할 일 (예: 금요일까지 보고서)", onSubmit: (v) => addTodoTo(ds, v) } }]) },
@@ -2790,6 +3501,7 @@ const settings = {
     $('#font-down').disabled = this.scale <= UI_SCALES[0];
     $('#font-up').disabled = this.scale >= UI_SCALES[UI_SCALES.length - 1];
     document.querySelectorAll('#theme-seg button').forEach((b) => b.classList.toggle('active', b.dataset.theme === this.theme));
+    document.querySelectorAll('#lunar-seg button').forEach((b) => b.classList.toggle('active', b.dataset.lunar === store.get('lunar', 'key')));
     document.querySelector('meta[name=theme-color]')?.setAttribute('content', cssVar('--card') || '#ffffff');
     relayout();
   },
@@ -3022,6 +3734,25 @@ function bindPad() {
     else ta.setRangeText(`\n${m[1]}${m[2].startsWith('[') ? '[ ]' : '☐'} `, pos, pos, 'end');
     ta.dispatchEvent(new Event('input'));
   });
+  $('#todo-sort').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    todoState.sort = b.dataset.sort;
+    store.set('todoSort', todoState.sort);
+    renderTodos();
+  });
+  $('#search-btn').onclick = openSearch;
+  $('#search-close').onclick = () => $('#search-ov').classList.add('hidden');
+  $('#search-ov').addEventListener('click', (e) => { if (e.target.id === 'search-ov') $('#search-ov').classList.add('hidden'); });
+  $('#search-input').addEventListener('input', () => { clearTimeout(searchState.timer); searchState.timer = setTimeout(runSearch, 250); });
+  $('#open-export').onclick = openExport;
+  $('#day-menu-btn').onclick = openExport;
+  $('#lunar-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    store.set('lunar', b.dataset.lunar);
+    settings.apply();
+  });
   $('#todo-add').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;
     e.preventDefault();
@@ -3073,7 +3804,9 @@ function bindPad() {
   // 키보드 (윈도우)
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && closeTopLayer()) { e.preventDefault(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openSearch(); return; }
     if (e.target.matches('input, textarea, select')) return;
+    if (e.key === '/' && state.view === 'month') { e.preventDefault(); openSearch(); return; }
     if (state.view === 'day') {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? restore(pad.redo, pad.undo) : restore(pad.undo, pad.redo); }
@@ -3141,12 +3874,15 @@ async function init() {
   settings.apply();
   await notes.loadLocal();
   updateAuthUI();
-  const openToday = new URLSearchParams(location.search).get('open') === 'today';
+  const params = new URLSearchParams(location.search);
+  const openToday = params.get('open') === 'today';
+  const shared = params.get('shared') === '1';
   history.replaceState(null, '', location.pathname);
   renderMonth();
   if (openToday) openDay(ymd(new Date()));
   showInstallHint();
   if (!store.get('onboarded', false)) showOnboarding();
+  takeShared(shared).catch((e) => console.warn('공유받기', e));
   if (auth.connected()) { watchExpiry(); afterSignIn(); }
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));

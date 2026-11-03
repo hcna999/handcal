@@ -24,6 +24,8 @@ jobs:
         run: node tests/smoke.mjs
       - name: 화면 조작 확인
         run: node tests/ux.mjs
+      - name: 기능 확인
+        run: node tests/features.mjs
       - name: 개발 안내 최신화 확인
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: |

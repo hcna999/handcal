@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=29">
-<script src="config.js?v=29"></script>
+<link rel="stylesheet" href="style.css?v=30">
+<script src="config.js?v=30"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=29"></script>
-<script src="app.js?v=29" defer></script>
+<script src="vendor/perfect-freehand.js?v=30"></script>
+<script src="app.js?v=30" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -74,8 +74,8 @@
     <button id="panel-toggle" class="pill" aria-expanded="false">일정</button>
   </div>
   <div class="right">
-    <button id="search-btn" data-soon class="icon-btn" aria-label="검색" title="검색"><svg class="ic"><use href="#i-search"/></svg></button>
-    <button id="day-menu-btn" data-soon class="icon-btn hidden" aria-label="더 보기" title="내보내기 등"><svg class="ic"><use href="#i-more"/></svg></button>
+    <button id="search-btn" class="icon-btn" aria-label="검색" title="검색"><svg class="ic"><use href="#i-search"/></svg></button>
+    <button id="day-menu-btn" class="icon-btn hidden" aria-label="더 보기" title="내보내기 등"><svg class="ic"><use href="#i-more"/></svg></button>
     <div class="settings-wrap">
       <button id="settings-btn" class="icon-btn" aria-label="설정" aria-expanded="false" title="설정"><svg class="ic"><use href="#i-gear"/></svg><span id="sync-dot" class="sync-dot" aria-hidden="true"></span></button>
       <div id="settings" class="settings hidden" role="dialog" aria-label="설정">
@@ -102,8 +102,8 @@
             <button data-theme="light">라이트</button>
             <button data-theme="dark">다크</button>
           </div>
-          <span class="settings-label" data-soon>음력 표시</span>
-          <div class="seg" id="lunar-seg" data-soon>
+          <span class="settings-label">음력 표시</span>
+          <div class="seg" id="lunar-seg">
             <button data-lunar="off">끔</button>
             <button data-lunar="key">1일·15일</button>
             <button data-lunar="all">매일</button>
@@ -129,7 +129,7 @@
         <section class="settings-sec">
           <h3>데이터 · 기타</h3>
           <div class="settings-btns">
-            <button id="open-export" data-soon class="pill">내보내기</button>
+            <button id="open-export" class="pill">내보내기</button>
             <button id="open-trash" class="pill">휴지통</button>
             <button id="open-templates" class="pill">메모 서식</button>
             <button id="open-lock" data-soon class="pill">앱 잠금</button>
@@ -156,7 +156,11 @@
     <div id="todo-view" class="list-view hidden">
       <div class="todo-bar">
         <strong id="todo-count"></strong>
-        <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료한 것도 보기</label>
+        <div class="seg" id="todo-sort">
+          <button data-sort="due">기한순</button>
+          <button data-sort="date">날짜순</button>
+        </div>
+        <label class="todo-toggle"><input type="checkbox" id="todo-show-done"> 완료 보기</label>
       </div>
       <input id="todo-add" type="text" placeholder="＋ 오늘 할 일 추가 (엔터) · '금요일까지 보고서'처럼 쓰면 기한 인식" aria-label="오늘 할 일 추가" enterkeyhint="done">
       <div id="todo-items"></div>

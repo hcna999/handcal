@@ -45,6 +45,9 @@ export default {
       } else if (url.pathname === '/ocr' && req.method === 'POST') {
         await requireOwner(req, env);
         body = await ocr(env, await req.json());
+      } else if (url.pathname === '/transcribe' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await transcribe(env, await req.json());
       } else if (url.pathname === '/') {
         body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: !!env.GEMINI_API_KEY };
       } else return json({ error: 'not_found' }, 404, cors);
@@ -137,31 +140,25 @@ const OCR_SCHEMA = {
   required: ['text', 'summary', 'todos', 'decisions'],
 };
 
-async function ocr(env, body) {
+// Gemini에 그림·소리와 함께 물어보고 JSON으로 받음. 무료 서버가 붐비거나(503) 늦으면 더 가벼운 모델로 넘어감
+async function geminiJson(env, parts, schema, { deadlineMs = 50000 } = {}) {
   if (!env.GEMINI_API_KEY) throw httpError(500, 'gemini_not_configured', '서버에 GEMINI_API_KEY가 설정되지 않았어요');
-  const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
-  if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
-  const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
-  // 무료 서버가 붐비거나(503) 늦으면 더 가벼운 모델로 넘어감. 전체 시간은 화면 제한(60초)보다 짧게
   const models = [...new Set([env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-flash-latest'].filter(Boolean))];
   const perModelMs = Number(env.GEMINI_TIMEOUT_MS) || 20000;
-  const deadline = Date.now() + 50000;
+  const deadline = Date.now() + deadlineMs;
   const fails = [];
   for (const model of models) {
     const remaining = deadline - Date.now();
     if (remaining < 3000) break;
-    const generationConfig = { temperature: 0.2, responseMimeType: 'application/json', responseSchema: OCR_SCHEMA };
-    // 글자 옮기기에는 생각 단계가 필요 없음 → 끄면 훨씬 빠름 (2.5 계열만 지원)
+    const generationConfig = { temperature: 0.2, responseMimeType: 'application/json', responseSchema: schema };
+    // 받아쓰기에는 생각 단계가 필요 없음 → 끄면 훨씬 빠름 (2.5 계열만 지원)
     if (/^gemini-2\.5-flash/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
     let r;
     try {
       r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }] }],
-          generationConfig,
-        }),
+        body: JSON.stringify({ contents: [{ parts }], generationConfig }),
         signal: AbortSignal.timeout(Math.min(perModelMs, remaining)),
       });
     } catch (e) {
@@ -180,14 +177,41 @@ async function ocr(env, body) {
     const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
     let out;
     try { out = JSON.parse(text); } catch { out = { text }; }
-    const list = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
-    return { text: String(out.text || ''), summary: String(out.summary || ''), todos: list(out.todos), decisions: list(out.decisions), model, tried: fails.map((f) => `${f.model}:${f.kind}`) };
+    return { out, model, tried: fails.map((f) => `${f.model}:${f.kind}`) };
   }
   const kinds = new Set(fails.map((f) => f.kind));
   const detail = fails.map((f) => `${f.model}:${f.kind}`).join(', ');
   if (kinds.has('busy') || kinds.has('timeout')) throw httpError(503, 'gemini_busy', `지금 Gemini 무료 서버가 붐벼요. 1~2분 뒤 다시 시도해 주세요. (${detail})`);
   if (kinds.has('quota')) throw httpError(429, 'gemini_quota', `무료 사용량을 다 썼어요. 잠시 후(또는 내일) 다시 시도해 주세요. (${detail})`);
   throw httpError(502, 'gemini_model', `사용 가능한 Gemini 모델을 찾지 못했어요. (${detail})`);
+}
+
+const toList = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+
+async function ocr(env, body) {
+  const image = String(body?.image || '').replace(/^data:image\/\w+;base64,/, '');
+  if (!image || image.length > 15e6) throw httpError(400, 'bad_image', '이미지가 없거나 너무 커요');
+  const prompt = OCR_PROMPT + (body.date ? `\n(필기 날짜: ${String(body.date).slice(0, 10)})` : '');
+  const { out, model, tried } = await geminiJson(env, [{ text: prompt }, { inline_data: { mime_type: 'image/png', data: image } }], OCR_SCHEMA);
+  return { text: String(out.text || ''), summary: String(out.summary || ''), todos: toList(out.todos), decisions: toList(out.decisions), model, tried };
+}
+
+// ---------- 음성 → 글자 (Gemini). 앱이 16kHz 모노 WAV로 바꿔서 보냄
+const TRANSCRIBE_PROMPT = `이 녹음은 한국어 음성 메모 또는 회의 녹음이야. 아래 항목을 JSON으로 답해.
+1) text: 말한 내용을 빠짐없이 받아 적어. 말하는 사람이 여럿이면 줄을 바꿔. 군말(음, 어)은 빼고, 들리지 않는 부분은 [?]로 표시해.
+2) summary: 핵심을 한국어 1~3문장으로. 짧으면 빈 문자열.
+3) todos: 해야 할 일 목록 (담당자·기한이 들리면 포함). 없으면 빈 배열.`;
+const TRANSCRIBE_SCHEMA = {
+  type: 'OBJECT',
+  properties: { text: { type: 'STRING' }, summary: { type: 'STRING' }, todos: { type: 'ARRAY', items: { type: 'STRING' } } },
+  required: ['text', 'summary', 'todos'],
+};
+async function transcribe(env, body) {
+  const audio = String(body?.audio || '');
+  const mime = /^audio\/[\w.+-]+$/.test(body?.mime || '') ? body.mime : 'audio/wav';
+  if (!audio || audio.length > 19e6) throw httpError(400, 'bad_audio', '녹음이 없거나 너무 길어요 (6분 이하)');
+  const { out, model, tried } = await geminiJson(env, [{ text: TRANSCRIBE_PROMPT }, { inline_data: { mime_type: mime, data: audio } }], TRANSCRIBE_SCHEMA, { deadlineMs: 55000 });
+  return { text: String(out.text || ''), summary: String(out.summary || ''), todos: toList(out.todos), model, tried };
 }
 
 // ---------- 네이버 CalDAV

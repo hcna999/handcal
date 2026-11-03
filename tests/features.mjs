@@ -1,0 +1,122 @@
+// 기능 확인: 공휴일·음력, 할 일 기한 읽기·정렬, 전체 검색, 내보내기, 사진 탭, 주간 시간표
+// 사용: node tests/features.mjs   (오류가 있으면 종료 코드 1)
+import { createServer } from 'node:http';
+import { readFile, readFile as rf } from 'node:fs/promises';
+import { extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { deflateSync } from 'node:zlib';
+
+const { chromium } = createRequire(import.meta.url)('playwright');
+const root = fileURLToPath(new URL('..', import.meta.url));
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+const server = createServer(async (req, res) => {
+  const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^([/\\])+/, '');
+  try {
+    const body = await readFile(join(root, path || 'index.html'));
+    res.writeHead(200, { 'Content-Type': types[extname(path || 'index.html')] || 'application/octet-stream' });
+    res.end(body);
+  } catch {
+    res.writeHead(404).end();
+  }
+}).listen(0);
+const base = `http://localhost:${server.address().port}/`;
+
+// 시험용 작은 PNG (단색 64x48)
+function png(w, h) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf) => { let c = 0xffffffff; for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw.set([60, 120, 230], y * (w * 3 + 1) + 1 + x * 3);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+const results = [];
+const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); };
+const errors = [];
+
+const browser = await chromium.launch();
+try {
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block', acceptDownloads: true });
+  const p = await ctx.newPage();
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await p.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await p.addInitScript(() => {
+    localStorage.setItem('onboarded', 'true');
+    localStorage.setItem('installHintClosed', 'true');
+    if (localStorage.getItem('seeded')) return;
+    localStorage.setItem('seeded', '1');
+    const t = new Date();
+    const at = (d, h, m = 0) => new Date(t.getFullYear(), t.getMonth(), t.getDate() + d, h, m).toISOString();
+    localStorage.setItem('localEvents', JSON.stringify([
+      { id: 'a', title: '주간회의', allDay: false, start: at(0, 10), end: at(0, 11), updated: 1 },
+      { id: 'b', title: '고객 미팅', allDay: false, start: at(0, 10, 30), end: at(0, 12), updated: 1 },
+    ]));
+  });
+  await p.goto(base);
+  await p.waitForSelector('.cell');
+
+  // 공휴일·음력 (2026년 대체공휴일 3/2, 5/25, 8/17, 10/5 · 설날 2/17 · 추석 9/25)
+  const hol = await p.evaluate(() => Object.fromEntries(holidaysOf(2026)));
+  check('2026 대체공휴일', ['2026-03-02', '2026-05-25', '2026-08-17', '2026-10-05'].every((d) => hol[d] === '대체공휴일'));
+  check('설날·추석(음력)', hol['2026-02-17'] === '설날' && hol['2026-09-25'] === '추석');
+  check('음력 변환', (await p.evaluate(() => JSON.stringify(lunarOf(new Date(2026, 1, 17))))) === '{"leap":false,"m":1,"d":1}');
+
+  // 할 일 기한 읽기
+  const due = await p.evaluate(() => { const b = new Date(2026, 10, 3); return ['금요일까지', '내일', '11/7', '다음주 월요일', '20일까지', '그냥'].map((x) => parseDue(x, b)); });
+  check('기한 읽기', JSON.stringify(due) === JSON.stringify(['2026-11-06', '2026-11-04', '2026-11-07', '2026-11-09', '2026-11-20', null]), due.join(','));
+
+  // 메모 쓰기 → 할 일 기한순 → 검색 → 내보내기
+  await p.click('.cell.today');
+  await p.waitForTimeout(400);
+  await p.click('#text-page');
+  await p.keyboard.type('주간회의 메모');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('[] 내일까지 견적서');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('그냥 할 일');
+  await p.waitForTimeout(600);
+  await p.click('#back-btn');
+  await p.waitForTimeout(300);
+  await p.click('[data-view=todo] >> visible=true');
+  await p.waitForTimeout(600);
+  check('할 일 기한순 묶음', (await p.$$eval('#todo-items .todo-date', (x) => x.map((i) => i.textContent))).some((t) => t.startsWith('내일')));
+  await p.click('[data-view=week] >> visible=true');
+  await p.waitForTimeout(400);
+  check('주간 시간표 (겹치는 일정 나란히)', (await p.$$('.wtime-ev')).length === 2);
+  await p.keyboard.press('Control+K');
+  await p.fill('#search-input', '견적');
+  await p.waitForTimeout(900);
+  const hits = await p.$$eval('.search-hit', (x) => x.map((i) => i.textContent));
+  check('전체 검색', hits.length === 1 && hits[0].includes('할 일'), hits.join(' | '));
+  await p.click('.search-hit');
+  await p.waitForTimeout(400);
+  await p.click('#day-menu-btn');
+  const [dl] = await Promise.all([p.waitForEvent('download'), p.click('#modal-body button >> text=마크다운 저장')]);
+  const md = await rf(await dl.path(), 'utf8');
+  check('마크다운 내보내기', md.includes('- [ ] 내일까지 견적서') && md.includes('주간회의'));
+  await p.click('#modal-close');
+
+  // 사진 탭: 넣으면 줄여서 저장, 달력 요약에 사진 설명
+  await p.evaluate(() => addPage('photo'));
+  await p.setInputFiles('.media-pick input', { name: 'a.png', mimeType: 'image/png', buffer: png(64, 48) });
+  await p.waitForTimeout(800);
+  check('사진 탭에 사진', (await p.evaluate(() => pad.note.media.length)) === 1 && (await p.$eval('.photo img', (i) => i.naturalWidth > 0)));
+  await p.fill('.media-text', '화이트보드');
+  await p.waitForTimeout(600);
+  await p.click('#back-btn');
+  await p.waitForTimeout(400);
+  await p.click('[data-view=month] >> visible=true');
+  check('달력 요약에 사진 설명', ((await p.textContent('.cell.today .digest')) || '').includes('화이트보드'));
+  await ctx.close();
+} finally {
+  await browser.close();
+  server.close();
+}
+for (const e of errors) console.log('✗ 페이지 오류:', e);
+const failed = results.filter((r) => !r).length + errors.length;
+console.log(failed ? `\n실패 ${failed}개` : `\n모두 통과 (${results.length}개)`);
+process.exit(failed ? 1 : 0);

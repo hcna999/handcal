@@ -27,6 +27,7 @@
 | `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`: 대시보드 변수를 지우지 않음) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
+| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표 |
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 |
@@ -49,7 +50,8 @@
   ] }
 ```
 
-- `pages`는 **탭**이며 최대 5개(`MAX_TABS`)다. `kind: 'text'`는 키보드 메모, 없으면 손글씨다. 새 날짜는 키보드 메모로 시작한다.
+- `pages`는 **탭**이며 최대 5개(`MAX_TABS`)다. `kind`: 없음=손글씨, `'text'`=키보드 메모, `'photo'`=사진, `'voice'`=음성. 새 날짜는 키보드 메모로 시작한다.
+- 사진·음성 탭은 `media: [{id, type:'image'|'audio', mime, w, h, dur, driveId, transcribed}]`와 `text`(사진 설명·받아쓴 글)를 가진다. 파일은 기기 IndexedDB `blob:<id>`에 먼저 두고, 동기화 때 드라이브에 `media-날짜-id.jpg|webm|m4a`로 올려 `driveId`를 기록한다(`uploadMedia`). 다른 기기는 `driveId`로 내려받는다(`mediaBlob`).
 - 좌표는 폭 1000 기준의 논리 단위다(`PAGE_W`=1000, `PAGE_H`=1414이고 종이를 늘리면 높이가 PAGE_H씩 커진다).
 - 예전 형식(v1: 최상위에 `strokes`, `ocr`)은 `normalize()`가 첫 탭으로 바꿔 읽는다. **이 호환성을 깨지 말 것.**
 - `ocr.sig`가 지금 획 상태(`inkSig`)와 다르면 다시 변환할 대상이다.
@@ -79,6 +81,14 @@
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
 - 아직 만들지 않은 기능의 버튼은 `data-soon` 속성으로 숨긴다(완성하면 속성을 지운다).
 
+## 할 일·기한·공휴일·검색·내보내기
+
+- 할 일 글에서 기한을 읽는다(`parseDue`, 기준은 메모 날짜): 오늘·내일·모레, '금요일까지', '다음주 월요일', '11/7', '7일까지', '3일 뒤', '월말'. 할 일 모아보기는 기한순(지남·오늘·내일·이번 주·나중·기한 없음)·날짜순. 구글 Tasks 마감일도 이 기한(없으면 메모 날짜)이다.
+- 음력은 브라우저 내장 한국 달력(`Intl.DateTimeFormat('ko-KR-u-ca-dangi')`, `lunarOf`)으로 계산한다. 공휴일·대체공휴일은 `holidaysOf(연도)`가 규칙으로 만든다(선거일 등 임시 공휴일은 없음). 설정 '음력 표시'(끔/1일·15일/매일).
+- 전체 검색(돋보기, Ctrl+K, `/`)은 메모·변환된 손글씨·음성 글·사진 설명·할 일·일정 제목을 찾는다(`runSearch`).
+- 내보내기(설정 또는 하루 화면 ⋯): 기간을 골라 마크다운 파일 저장 / PDF(인쇄 창) / 공유(`exportRange`).
+- 안드로이드 공유 대상: `manifest.webmanifest`의 `share_target` → `sw.js`가 `share-inbox` 캐시에 두고 `./?shared=1`로 열기 → `takeShared`가 오늘 메모(글)·사진 탭에 넣는다.
+
 ## 할 일
 
 - 키보드 메모에서 `☐`/`[ ]`로 시작하는 줄(`☑`/`[x]`는 완료)과 손글씨 OCR의 `todos`가 할 일이다(`todosOf`, `TODO_RE`).
@@ -92,7 +102,8 @@
 | `POST /auth/exchange` | 구글 인증 코드 → 토큰 (클라이언트 보안 비밀번호는 서버에만) |
 | `POST /auth/refresh` | 리프레시 토큰으로 새 액세스 토큰 |
 | `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용 |
-| `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로) |
+| `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`) |
+| `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
 
 - 구글 토큰과 `OWNER_EMAIL`로 주인만 쓸 수 있다.
@@ -114,7 +125,7 @@ npm i -D playwright   # 처음 한 번 (브라우저: npx playwright install chr
 node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오류가 있으면 종료 코드 1
 ```
 
-- `node tests/ux.mjs [스크린샷 폴더]`로 화면 조작도 확인한다.
+- `node tests/ux.mjs [스크린샷 폴더]`, `node tests/features.mjs`로 화면 조작과 기능도 확인한다.
 - 스크립트는 구글 연결 없이 "이 기기에만 저장" 모드로 돈다. 첫 실행 안내는 `localStorage.onboarded`로 건너뛴다.
 - 구글·드라이브·Tasks·Worker가 얽힌 기능은 Playwright `page.route()`로 가짜 응답을 만들어 시험한다. 서비스 워커가 가로채지 않도록 `browser.newContext({ serviceWorkers: 'block' })`를 쓴다.
 
