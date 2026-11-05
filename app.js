@@ -3606,8 +3606,9 @@ window.argonRefine = {
     }
     refreshDigest(date, doc);
     if (state.view === 'month') renderMonth();
+    refineNews.put(`${date}:${pageId}`, { date, pageId, changes: (changes || []).slice(0, 5), at: Date.now() });
     if (auth.connected()) {
-      await Promise.all([notes.flush(), digests.sync(), glossary.sync(), gtasks.run(false)]).catch((e) => console.warn(e));
+      await Promise.all([notes.flush(), digests.sync(), glossary.sync(), refineNews.sync(), gtasks.run(false)]).catch((e) => console.warn(e));
     }
     return { ok: true, date, pageId, changesCount: (changes || []).length };
   },
@@ -3739,6 +3740,8 @@ async function afterSignIn() {
     trash.sync().catch(console.warn);
     templates.sync().catch(console.warn);
     glossary.sync().catch(console.warn);
+    refineNews.sync().then(showRefineNews).catch(console.warn);
+    setTimeout(() => backup.run().catch((e) => console.warn('백업 실패', e)), 15000);
     noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
     prefs.sync().then(() => { renderCalFilter(); rerender(); }).catch(console.warn);
     events.clear();
@@ -4672,6 +4675,105 @@ function shiftMini(n) {
   renderMiniCal();
 }
 
+// 밤사이 AI 다듬기 소식: 안티그래비티(argonRefine.applyResult)가 고친 탭을 드라이브 refine-news.json에 남기고,
+// 내 기기가 열릴 때 아직 안 본 것을 "밤사이 손글씨 N곳을 고쳤어요 [보기]"로 한 번 알려줌 (30일 보관)
+const refineNews = Object.assign(syncedStore('refine-news.json', 'refineNews', 30), {
+  unseen() {
+    const seen = store.get('refineSeen', 0);
+    return this.live().map(([k, v]) => ({ k, ...v })).filter((x) => (x.at || 0) > seen).sort((a, b) => b.at - a.at);
+  },
+});
+function showRefineNews() {
+  const list = refineNews.unseen();
+  if (!list.length) return;
+  toast(`밤사이 AI가 손글씨 ${list.length}곳을 다듬었어요`, 9000, { label: '보기', fn: () => openRefineNews(list) });
+}
+function openRefineNews(list = refineNews.unseen()) {
+  store.set('refineSeen', Date.now());
+  const rows = list.length ? list.map((x) => {
+    const row = el('div', 'news-row');
+    const head = el('div', 'news-head');
+    const d = parseYmd(x.date);
+    head.append(el('strong', '', `${d.getMonth() + 1}월 ${d.getDate()}일`));
+    const go = el('button', 'pill', '열어 보기');
+    go.onclick = async () => {
+      closeModal();
+      await openDay(x.date);
+      const i = pad.doc.pages.findIndex((p) => p.id === x.pageId);
+      if (i >= 0) switchPage(i);
+    };
+    head.append(go);
+    row.append(head);
+    const ch = (x.changes || []).map((c) => (typeof c === 'string' ? c : `${c.from} → ${c.to}`)).filter(Boolean);
+    row.append(el('p', 'muted-text', ch.length ? ch.join(' · ') : '고친 곳 목록 없음'));
+    return row;
+  }) : [el('p', 'muted-text', '새로 다듬은 손글씨가 없어요.')];
+  rows.push(el('p', 'muted-text', '마음에 안 들면 그 탭의 변환 카드에서 [초벌로 되돌리기]를 누르세요.'));
+  openModal('밤사이 AI 다듬기', rows);
+}
+
+// 자동 백업: 한 달에 한 번 드라이브에 전체 메모 묶음(backup-YYYY-MM.json)을 남기고 최근 6개만 유지
+const backup = {
+  running: false,
+  async build() {
+    const days = {};
+    for (const ds of allNoteDates()) {
+      try { const doc = await notes.get(ds); if (!docEmpty(doc)) days[ds] = doc; } catch (e) { console.warn('백업: 읽기 실패', ds, e); }
+    }
+    return {
+      v: 1,
+      at: new Date().toISOString(),
+      days,
+      events: memos.all(),
+      digests: store.get('digests', {}),
+      templates: store.get('templates', {}),
+      glossary: store.get('glossary', {}),
+      prefs: store.get('prefs', {}),
+    };
+  },
+  async run({ force = false } = {}) {
+    if (this.running || !auth.connected()) return null;
+    const month = ymd(new Date()).slice(0, 7);
+    if (!force && store.get('backupMonth', '') === month) return null;
+    this.running = true;
+    try {
+      const files = await drive.list();
+      const name = `backup-${month}.json`;
+      if (!force && files.has(name)) { store.set('backupMonth', month); return null; }
+      const data = await this.build();
+      const old = files.get(name);
+      const res = old ? await drive.update(old.id, data) : await drive.create(name, data);
+      // 오래된 백업 정리 (최근 6개만)
+      const backups = [...files.keys()].filter((n) => /^backup-\d{4}-\d{2}\.json$/.test(n) && n !== name).sort().reverse();
+      for (const n of backups.slice(5)) await drive.remove(files.get(n).id).catch(() => {});
+      store.set('backupMonth', month);
+      store.set('backupAt', Date.now());
+      return { name, days: Object.keys(data.days).length, id: res?.id };
+    } finally {
+      this.running = false;
+    }
+  },
+};
+
+function openBackup() {
+  const at = store.get('backupAt', 0);
+  const info = el('p', 'muted-text', at
+    ? `마지막 백업: ${new Date(at).toLocaleString('ko-KR')} · 구글 드라이브 '필기캘린더' 폴더의 backup-연-월.json (최근 6개 보관)`
+    : '아직 백업이 없어요. 로그인해 두면 한 달에 한 번 자동으로 드라이브에 남겨요.');
+  const btn = el('button', 'pill primary', '지금 백업하기');
+  btn.onclick = async () => {
+    if (!auth.connected()) return toast('구글 로그인 뒤에 백업할 수 있어요');
+    btn.disabled = true;
+    btn.textContent = '백업 중…';
+    try {
+      const r = await backup.run({ force: true });
+      if (r) toast(`백업했어요: ${r.name} (${r.days}일치)`);
+      closeModal();
+    } catch (e) { handleErr(e); btn.disabled = false; btn.textContent = '지금 백업하기'; }
+  };
+  openModal('백업', [info, el('p', 'muted-text', '메모·손글씨·할 일·메모 일정·서식·용어집·설정을 한 파일로 묶어요. 사진·녹음은 드라이브에 따로 있어 묶지 않아요.'), btn]);
+}
+
 // 휴지통: 지운 탭을 30일 보관 (드라이브 trash.json으로 기기끼리 공유)
 const trash = Object.assign(syncedStore('trash.json', 'trash', 30), {
   add(date, page) { this.put(page.id, { date, page, at: Date.now() }); },
@@ -5159,6 +5261,8 @@ function bind() {
   $('#open-templates').onclick = openTemplateEditor;
   if ($('#open-glossary')) $('#open-glossary').onclick = () => glossary.sync().catch(() => {}).finally(openGlossary);
   if ($('#open-refine-log')) $('#open-refine-log').onclick = openRefineLog;
+  $('#open-refine-news').onclick = () => { $('#settings').classList.add('hidden'); openRefineNews(refineNews.live().map(([k, v]) => ({ k, ...v })).sort((a, b) => b.at - a.at).slice(0, 30)); };
+  $('#open-backup').onclick = () => { $('#settings').classList.add('hidden'); openBackup(); };
   if ($('#token-transfer-btn')) $('#token-transfer-btn').onclick = openTokenTransfer;
   $('#open-onboard').onclick = () => { $('#settings').classList.add('hidden'); showOnboarding(); };
   $('#sync-now').onclick = () => { lastRefresh = 0; notes.lastSync = 0; refreshInBackground(); notes.flush(); };

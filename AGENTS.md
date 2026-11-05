@@ -69,6 +69,8 @@
 | `digests.json` | 달력 칸 한 줄 요약 `{날짜: {text, todos, at}}` | 날짜별 `at`이 최신인 쪽 |
 | `index.json` | 날짜별 색인 `{날짜: {p: 미리보기[{kind,text,ink}], todos, u, t}}` — 목록·검색·할 일을 문서를 다 읽지 않고 그림 | 항목별 `t` 최신 (`noteIndex`) |
 | `prefs.json` | 기기끼리 같이 쓰는 설정. 지금은 `hiddenCals: {list: [끈 캘린더 이름…]}` | 항목별 `t` 최신 (`syncedStore`) |
+| `refine-news.json` | 안티그래비티 다듬기 소식 `{날짜:탭id: {date, pageId, changes, at, t}}` — 다른 기기가 열릴 때 "밤사이 N곳" 알림 | 항목별 `t` 최신 (`syncedStore`, 30일) |
+| `backup-YYYY-MM.json` | 월 자동 백업: 모든 날짜 문서 + 메모 일정·요약·서식·용어집·설정 (사진·녹음 제외). 최근 6개 유지 (`backup.run`, ⚙ 데이터 → 백업) | 덮어씀 |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
 | `glossary.json` | 개인 용어집 `{단어: {src: 'user'\|'auto', t}}` — 손글씨 OCR·정밀 다듬기 프롬프트에 힌트로 전달 | 항목별 `t` 최신 (`syncedStore`) |
 | `refine-log.json` | 유료 모델 정밀 다듬기 실행 내역 및 월별 비용 `{runs:[…], monthly:{YYYY-MM:{usd,pages}}}` | 서버/앱이 최신 기록 추가 |
@@ -79,7 +81,7 @@
 ### 기기 저장
 
 - IndexedDB `handcal` / store `kv`에 키 `note:YYYY-MM-DD`로 하루 메모를 보관한다(드라이브 사본).
-- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2`, `sideOpen` …), `naverCals`(마지막으로 받은 네이버 캘린더 이름·색 목록), `naverEvents`(받아 둔 네이버 일정 `{months: {YYYY-MM: 받은 시각}, list}`, 오늘 앞뒤 18개월만)가 있다.
+- localStorage에는 `auth`, `refresh`(구글 리프레시 토큰), `pending`(드라이브에 아직 안 올린 날짜), `digests`, `localEvents`, `gtasksMap`, `ocrQueue`, 화면 설정(`theme`, `uiScale`, `calView`, `panelHidden2`, `fingerDraw2`, `sideOpen` …), `naverCals`(마지막으로 받은 네이버 캘린더 이름·색 목록), `refineSeen`(다듬기 소식 마지막으로 본 시각), `backupMonth`·`backupAt`(마지막 백업), `naverEvents`(받아 둔 네이버 일정 `{months: {YYYY-MM: 받은 시각}, list}`, 오늘 앞뒤 18개월만)가 있다.
 
 ## 화면 구성 (요약)
 

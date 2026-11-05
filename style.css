@@ -847,3 +847,8 @@ body.in-day .side-backdrop { display: none !important; }
 .due-open { flex: 1; text-align: left; border: 0; background: none; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .due-bar.over .due-open { color: var(--sun); }
 .due-close { border: 0; background: none; font-size: 1.1rem; color: var(--muted); padding: 4px 12px; }
+
+/* 밤사이 다듬기 소식 */
+.news-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.news-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.news-row .muted-text { margin: 4px 0 0; }

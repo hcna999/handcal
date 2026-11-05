@@ -119,8 +119,42 @@ try {
   const merged = JSON.parse(docFile().data).pages.map((x) => x.text);
   check('양쪽 새 탭이 모두 남음', merged.includes('B의 새 탭') && merged.includes('A의 새 탭'), merged.join(' | '));
   check('같은 탭을 둘 다 고치면 충돌 사본으로 보존', merged.some((t) => t.includes('A가 또 고침')) && merged.some((t) => t.includes('B가 덧붙임')));
+  // 안티그래비티 다듬기 도우미: 대상 모으기(개수 제한) → 결과 반영 → 소식 남기기, 그리고 월 백업
+  await A.p.click('.cell.today');
+  await A.p.waitForTimeout(400);
+  await A.p.evaluate(() => {
+    // 탭 수 제한(5개)을 넘지 않게 손글씨 탭 둘을 직접 붙임
+    for (let n = 0; n < 2; n++) {
+      const pg = blankPage();
+      pg.strokes.push({ tool: 'pen', color: '#111111', size: 3, points: [[40, 40 + n * 30, 0.5], [120, 90, 0.5], [200, 60, 0.5]] });
+      pad.doc.pages.push(pg);
+    }
+    renderTabs();
+    saveSoon();
+  });
+  const got = await A.p.evaluate(() => window.argonRefine.collectTargets(14, 1));
+  check('다듬기 대상 모으기(개수 제한·남은 수)', got.count === 1 && got.remaining >= 1 && got.items[0].image?.length > 100, `count ${got.count} remaining ${got.remaining}`);
+  const it = got.items[0];
+  const applied = await A.p.evaluate((x) => window.argonRefine.applyResult({ date: x.date, pageId: x.pageId, sig: x.sig, text: '고장분석 회의', summary: '고장분석', todos: [], decisions: [], changes: ['고정분석 -> 고장분석'] }), it);
+  check('다듬기 결과 반영', applied.ok === true);
+  await A.p.waitForTimeout(2500);
+  check('다듬기 소식이 드라이브에', !!Object.values(files).find((f) => f.name === 'refine-news.json' && f.data.includes('고장분석')));
+  const bk = await A.p.evaluate(() => backup.run({ force: true }));
+  const bkFile = Object.values(files).find((f) => /^backup-\d{4}-\d{2}\.json$/.test(f.name));
+  check('월 백업 파일', !!bk && !!bkFile && JSON.parse(bkFile.data).days[bk.name ? Object.keys(JSON.parse(bkFile.data).days)[0] : ''] !== undefined, bk?.name);
+  // 다음 시험이 같은 날짜에 탭을 더 열 수 있게 붙였던 손글씨 탭을 치움
+  await A.p.evaluate(() => { pad.doc.pages = pad.doc.pages.filter((x) => !x.strokes.length); pad.pageIdx = 0; renderTabs(); saveSoon(); });
+  await A.p.click('#back-btn');
+  await A.p.waitForTimeout(2500);
   await A.ctx.close();
   await B.ctx.close();
+  // 다른 기기를 열면 밤사이 다듬기 소식을 한 번 알림
+  const D = await device(browser);
+  await D.p.waitForTimeout(2000);
+  check('다른 기기에서 다듬기 소식 알림', ((await D.p.textContent('#toast-msg')) || '').includes('밤사이'));
+  await D.p.click('#toast-action');
+  check('소식 보기 창', ((await D.p.textContent('#modal-body')) || '').includes('고장분석'));
+  await D.ctx.close();
 
   // 오프라인 표시
   const C = await device(browser, { signedIn: false });
