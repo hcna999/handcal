@@ -146,6 +146,17 @@ try {
   check('캘린더 끄고 켜기', !off.includes('주간회의') && (await chips()).includes('주간회의'), off);
   check('달력 요약에 사진 설명', ((await p.textContent('.cell.today .digest')) || '').includes('화이트보드'));
 
+  // 하루 화면 할 일 패널: 메모에 ☐ 줄을 치면 패널 목록도 바로 바뀜
+  await p.click('.cell.today');
+  await p.waitForTimeout(400);
+  await p.evaluate(() => addPage('text'));
+  await p.click('#text-page');
+  await p.keyboard.type('☐ 패널에 보일 일');
+  await p.waitForTimeout(500);
+  check('타자로 친 할 일이 할 일 패널에 바로', ((await p.textContent('#day-todo-list')) || '').includes('패널에 보일 일'));
+  await p.click('#back-btn');
+  await p.waitForTimeout(300);
+
   // 6-1 달력 제목 눌러 날짜 바로 이동
   await p.click('#month-title');
   await p.waitForTimeout(200);

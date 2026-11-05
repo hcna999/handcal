@@ -896,7 +896,10 @@ async function refineRun(env, { dry = false, scheduled = false, token: reqToken 
     const t = await refresh(env, { refresh_token: rt });
     token = t.access_token;
   }
-  if (!token) throw httpError(400, 'no_drive_token', '서버에 등록된 드라이브 토큰이 없어요');
+  if (!token) {
+    if (scheduled) return { ok: true, skipped: 'no_token', refined: [] }; // 예약 실행인데 토큰을 아직 안 넣었으면 조용히 건너뜀
+    throw httpError(400, 'no_drive_token', '서버에 등록된 드라이브 토큰이 없어요');
+  }
 
   const fq = encodeURIComponent("name='필기캘린더' and mimeType='application/vnd.google-apps.folder' and trashed=false");
   const fr = await dJson(token, `${DRIVE_API}?q=${fq}&fields=files(id)`);
@@ -1030,7 +1033,12 @@ async function refineRun(env, { dry = false, scheduled = false, token: reqToken 
   }
 
   if (!dry && refined.length) {
-    if (dgChanged) await dSaveJson(token, folderId, dgFile.id, 'digests.json', { v: 1, days: digests });
+    if (dgChanged) {
+      // 다듬는 동안 기기에서 고친 요약이 있을 수 있으니 저장 직전에 다시 읽어 날짜별로 최신(at)만 덮어씀
+      const latest = (await readJsonFile('digests.json', { v: 1, days: {} })).data?.days || {};
+      for (const [ds, v] of Object.entries(digests)) if (!latest[ds] || (v.at || 0) > (latest[ds].at || 0)) latest[ds] = v;
+      await dSaveJson(token, folderId, dgFile.id, 'digests.json', { v: 1, days: latest });
+    }
     if (glChanged) await dSaveJson(token, folderId, glFile.id, 'glossary.json', { v: 1, items: glItems });
     if (gtChanged) await dSaveJson(token, folderId, gtFile.id, 'gtasks.json', { v: 1, map: gtMap });
     runs.unshift({

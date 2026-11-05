@@ -25,11 +25,11 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=44">
-<script src="config.js?v=44"></script>
+<link rel="stylesheet" href="style.css?v=45">
+<script src="config.js?v=45"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=44"></script>
-<script src="app.js?v=44" defer></script>
+<script src="vendor/perfect-freehand.js?v=45"></script>
+<script src="app.js?v=45" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -68,7 +68,7 @@
     </div>
   </div>
   <div id="day-nav" class="nav hidden">
-    <button id="back-btn" class="pill">‹ 달력</button>
+    <button id="back-btn" class="pill" aria-label="달력으로">‹<span class="back-lbl"> 달력</span></button>
     <button id="prev-day" class="arrow" aria-label="이전 날">‹</button>
     <h1 id="day-title" title="눌러서 연·월·날짜 바로 이동"></h1>
     <button id="next-day" class="arrow" aria-label="다음 날">›</button>

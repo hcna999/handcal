@@ -831,3 +831,12 @@ body.in-day .side-backdrop { display: none !important; }
 .day-events-details summary { font-size: 0.85rem; font-weight: 600; color: var(--muted-strong); cursor: pointer; padding: 2px 0 6px; }
 
 
+
+/* 휴대폰 하루 화면: 위쪽 줄이 두 줄로 넘치지 않게 (검색은 달력 화면에서, '달력' 글자는 숨김) */
+@media (max-width: 599px) {
+  body.in-day #search-btn { display: none; }
+  body.in-day .back-lbl { display: none; }
+  body.in-day .right { gap: 4px; }
+  body.in-day #panel-toggle { margin-left: 2px; padding: 6px 8px; }
+}
+.warn-text { margin: 0; padding: 8px 10px; border-radius: 8px; font-size: 0.82rem; background: rgba(234, 88, 12, .12); color: var(--text, inherit); border: 1px solid rgba(234, 88, 12, .35); }

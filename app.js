@@ -3742,6 +3742,7 @@ function openTokenTransfer() {
   box.style.gap = '10px';
   const desc = el('p', 'muted-text', '다른 브라우저(또는 안티그래비티 자동화 창)에서 구글 팝업 로그인이 막힐 때, 이미 로그인된 브라우저에서 연결 코드를 복사해 붙여넣으면 바로 같은 구글 드라이브에 연결됩니다.');
   box.append(desc);
+  box.append(el('p', 'warn-text', '⚠ 이 코드는 구글 드라이브 메모와 할 일을 열 수 있는 열쇠예요. 내 기기끼리만 쓰고 메신저·메일로 다른 사람에게 보내지 마세요. 새어 나갔다면 ⚙ → 로그아웃 후 다시 로그인하면 이전 코드는 못 써요.'));
   if (curRefresh || curAuth?.token) {
     const payload = btoa(unescape(encodeURIComponent(JSON.stringify({ r: curRefresh, a: curAuth }))));
     const copyBtn = el('button', 'pill primary', '현재 로그인 연결 코드 복사하기');
@@ -5287,7 +5288,7 @@ function bindPad() {
     const m = /^(\s*(?:[-*•]\s*)?)\[\] $/.exec(v.slice(lineStart, pos));
     if (m) ta.setRangeText(m[1] + '☐ ', lineStart, pos, 'end');
     clearTimeout(ta._todoTimer);
-    ta._todoTimer = setTimeout(renderTextTodos, 300);
+    ta._todoTimer = setTimeout(() => { renderTextTodos(); renderDayTodos(); }, 300);
     if (pad.note.kind !== 'text' || ta.dataset.pageId !== pad.note.id) return;
     pad.note.text = ta.value;
     const label = document.querySelector('.page-tab.active .page-tab-label');
