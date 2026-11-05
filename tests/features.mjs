@@ -204,6 +204,10 @@ try {
   // 6-4 주간 보기 지금 시각 줄 & 완료한 할 일 정리 & 개인 용어집
   await p.click('#back-btn');
   await p.waitForTimeout(300);
+  // 줄은 시간표 범위(기본 8~21시) 안에서만 그려지므로, 돌리는 시각과 상관없게 오늘 낮 12시로 고정
+  const noon = new Date();
+  noon.setHours(12, 0, 0, 0);
+  await p.clock.setFixedTime(noon);
   await p.click('[data-view=week] >> visible=true');
   await p.waitForTimeout(200);
   check('주간 보기 지금 시각 줄', (await p.$$('.wtime-now')).length === 1);
