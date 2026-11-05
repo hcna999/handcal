@@ -785,6 +785,7 @@ function renderMonth() {
   $('#week-grid').classList.toggle('hidden', v !== 'week');
   $('#list-view').classList.toggle('hidden', v !== 'list');
   for (const id of ['#prev-month', '#next-month', '#today-btn']) $(id).classList.toggle('hidden', v === 'list' || v === 'todo');
+  renderDueBar();
   miniState.month = v === 'week' && state.weekStart ? new Date(addDays(state.weekStart, 3).getFullYear(), addDays(state.weekStart, 3).getMonth(), 1) : state.month;
   renderMiniCal();
   if (v === 'todo') return renderTodos();
@@ -1062,6 +1063,32 @@ function dueLabel(due) {
 
 // ---------- 할 일 모아보기 (기한순 / 메모 날짜순)
 const todoState = { token: 0, showDone: store.get('todoShowDone', false), sort: store.get('todoSort', 'due') };
+// 달력 위 마감 알림 줄: 색인만 읽어 빠르게 "오늘 마감 N · 지난 것 N"을 세고, 누르면 할 일(기한순)로
+function renderDueBar() {
+  const bar = $('#due-bar');
+  if (!bar) return;
+  const today = ymd(new Date());
+  let dueToday = 0, overdue = 0;
+  if (store.get('dueBarHidden', '') !== today && (state.calView === 'month' || state.calView === 'week')) {
+    for (const ds of allNoteDates()) {
+      for (const t of noteIndex.get(ds)?.todos || []) {
+        if (t.done) continue;
+        const due = parseDue(t.text, parseYmd(ds));
+        if (!due) continue;
+        if (due === today) dueToday++;
+        else if (due < today) overdue++;
+      }
+    }
+  }
+  bar.classList.toggle('hidden', !(dueToday || overdue));
+  if (!(dueToday || overdue)) return;
+  const parts = [];
+  if (dueToday) parts.push(`오늘 마감 ${dueToday}개`);
+  if (overdue) parts.push(`기한 지난 것 ${overdue}개`);
+  $('#due-open').textContent = `☐ ${parts.join(' · ')} — 할 일 보기 ›`;
+  bar.classList.toggle('over', overdue > 0);
+}
+
 async function renderTodos() {
   $('#month-title').textContent = '할 일 모아보기';
   $('#todo-show-done').checked = todoState.showDone;
@@ -4431,8 +4458,11 @@ const noteIndex = Object.assign(syncedStore('index.json', 'noteIndex', 3650), {
     };
   },
   update(ds, doc) {
-    if (!doc || docEmpty(doc)) { this.del(ds); return; }
-    this.put(ds, this.entry(doc, ds));
+    if (!doc || docEmpty(doc)) this.del(ds);
+    else this.put(ds, this.entry(doc, ds));
+    // 할 일이 바뀌었을 수 있으니 달력 위 마감 알림 줄도 다시 셈 (모아서 한 번)
+    clearTimeout(this.dueTimer);
+    this.dueTimer = setTimeout(() => { if (state.view === 'month') renderDueBar(); }, 200);
   },
   // 검색에 쓸 가벼운 문서 모양
   doc(ds) {
@@ -5343,6 +5373,8 @@ function bindPad() {
   });
   $('#gtasks-reauth').onclick = () => connect('').then(() => gtasks.run(true)).catch(handleErr);
   $('#settings-btn').addEventListener('click', renderTasksStatus);
+  $('#due-open').onclick = () => { todoState.sort = 'due'; store.set('todoSort', 'due'); setCalView('todo'); };
+  $('#due-close').onclick = () => { store.set('dueBarHidden', ymd(new Date())); renderDueBar(); };
   $('#side-btn').onclick = () => setSide(!document.body.classList.contains('side-on'));
   $('#side-backdrop').onclick = () => setSide(false);
   $('#mini-prev').onclick = () => shiftMini(-1);

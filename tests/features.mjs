@@ -154,8 +154,20 @@ try {
   await p.keyboard.type('☐ 패널에 보일 일');
   await p.waitForTimeout(500);
   check('타자로 친 할 일이 할 일 패널에 바로', ((await p.textContent('#day-todo-list')) || '').includes('패널에 보일 일'));
+  await p.keyboard.type('\n☐ 오늘까지 보고서 제출');
+  await p.waitForTimeout(400);
   await p.click('#back-btn');
+  await p.waitForTimeout(500);
+  await p.click('[data-view=month] >> visible=true');
   await p.waitForTimeout(300);
+  const dueText = (await p.isVisible('#due-bar')) ? await p.textContent('#due-open') : '';
+  check('달력 위 오늘 마감 알림 줄', dueText.includes('오늘 마감'), dueText);
+  await p.click('#due-open');
+  await p.waitForTimeout(400);
+  check('알림 줄 누르면 할 일 보기', await p.isVisible('#todo-view'));
+  await p.click('[data-view=month] >> visible=true');
+  await p.click('#due-close');
+  check('× 누르면 오늘은 숨김', !(await p.isVisible('#due-bar')));
 
   // 6-1 달력 제목 눌러 날짜 바로 이동
   await p.click('#month-title');

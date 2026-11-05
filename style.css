@@ -840,3 +840,10 @@ body.in-day .side-backdrop { display: none !important; }
   body.in-day #panel-toggle { margin-left: 2px; padding: 6px 8px; }
 }
 .warn-text { margin: 0; padding: 8px 10px; border-radius: 8px; font-size: 0.82rem; background: rgba(234, 88, 12, .12); color: var(--text, inherit); border: 1px solid rgba(234, 88, 12, .35); }
+
+/* 달력 위 마감 알림 줄 */
+.due-bar { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; border: 1px solid var(--accent-border, var(--line)); background: var(--accent-soft, rgba(37,99,235,.08)); border-radius: 10px; }
+.due-bar.over { border-color: rgba(220, 38, 38, .4); background: rgba(220, 38, 38, .08); }
+.due-open { flex: 1; text-align: left; border: 0; background: none; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.due-bar.over .due-open { color: var(--sun); }
+.due-close { border: 0; background: none; font-size: 1.1rem; color: var(--muted); padding: 4px 12px; }
