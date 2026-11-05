@@ -18,18 +18,30 @@
     if (t !== 'auto') document.documentElement.dataset.theme = t;
     document.documentElement.style.setProperty('--ui-scale', JSON.parse(localStorage.getItem('uiScale') || '1'));
   } catch (e) { /* 저장소 사용 불가 */ }
-  // 화면 크기·기기 종류로 기본 글자 크기 자동 결정 (app.js의 autoFontPx와 같은 식)
+  // 화면 크기·기기 종류로 기본 글자 크기 자동 결정 (js/ui.js의 autoFontPx와 같은 식)
   (function () {
     const coarse = matchMedia('(pointer: coarse)').matches;
     const f = 9.5 + 0.0065 * Math.sqrt(innerWidth * innerHeight) + (coarse ? 0.5 : -1);
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=49">
-<script src="config.js?v=49"></script>
+<link rel="stylesheet" href="style.css?v=50">
+<script src="config.js?v=50"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=49"></script>
-<script src="app.js?v=49" defer></script>
+<script src="vendor/perfect-freehand.js?v=50"></script>
+<!-- 앱 코드: js/ 폴더, 이 순서대로 (전역 이름을 함께 씀) -->
+<script src="js/core.js?v=50" defer></script>
+<script src="js/events.js?v=50" defer></script>
+<script src="js/calendar.js?v=50" defer></script>
+<script src="js/export.js?v=50" defer></script>
+<script src="js/day.js?v=50" defer></script>
+<script src="js/tabs.js?v=50" defer></script>
+<script src="js/ocr.js?v=50" defer></script>
+<script src="js/sync.js?v=50" defer></script>
+<script src="js/media.js?v=50" defer></script>
+<script src="js/stores.js?v=50" defer></script>
+<script src="js/ui.js?v=50" defer></script>
+<script src="js/main.js?v=50" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->

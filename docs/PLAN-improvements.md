@@ -110,4 +110,4 @@ AGENTS.md와 docs/PLAN-improvements.md를 읽고 0단계(0-1 ~ 0-6)만 구현해
 - [x] **7-3 안전한 연결 이전 (M)**: 긴 연결 코드(리프레시 토큰 자체) 대신 Worker KV에 5분만 보관하는 8자리 1회용 코드(한 번 쓰면 삭제)로 바꿈(`/link/create`·`/link/claim`, `claimLinkCode`). KV가 없으면 긴 코드로 대신함. **먼저 필요한 것:** Cloudflare에 KV 네임스페이스를 만들고 `wrangler.toml`에 `HANDCAL_KV`로 연결(Worker는 요청마다 다른 실행 단위에서 돌 수 있어 메모리 보관은 믿을 수 없음).
 - [x] **7-4 자동 백업 (M)**: 한 달에 한 번 드라이브에 전체 메모 묶음(`backup-YYYY-MM.json`)을 남기고 최근 6개만 유지.
 - [x] **7-5 시험 보강 (M)**: `tests/sync.mjs`에 argonRefine(대상 모으기·개수 제한·결과 반영·소식), 월 백업, 다른 기기 소식 알림 시험 추가. (Worker `refineRun`은 cron을 꺼 두어 시험 생략)
-- [ ] **7-6 app.js 나누기 (L)**: 5,400줄 한 파일을 여러 AI가 함께 고치면 충돌·실수 위험이 커짐 → `js/` 폴더 ES 모듈(저장·동기화 / 달력 / 하루 화면 / 손글씨 / 할 일·Tasks / AI)로 나눔. 빌드 없는 구조는 유지.
+- [x] **7-6 app.js 나누기 (L)**: 5,700줄 한 파일을 `js/` 폴더 12개 일반 스크립트(core·events·calendar·export·day·tabs·ocr·sync·media·stores·ui·main)로 나눔. 내용·순서는 그대로(전역 공유), 빌드 없는 구조 유지. ES 모듈은 안티그래비티 도우미·시험이 전역 이름을 쓰므로 택하지 않음.

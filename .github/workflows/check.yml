@@ -33,6 +33,6 @@ jobs:
         run: |
           changed=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
           echo "$changed"
-          if echo "$changed" | grep -qE '^(app\.js|index\.html|style\.css|worker/worker\.js|sw\.js)$' && ! echo "$changed" | grep -qx 'AGENTS.md'; then
+          if echo "$changed" | grep -qE '^(js/.*\.js|index\.html|style\.css|worker/worker\.js|sw\.js)$' && ! echo "$changed" | grep -qx 'AGENTS.md'; then
             echo "::warning title=AGENTS.md 확인::앱·서버 코드가 바뀌었는데 AGENTS.md는 그대로예요. 구조·데이터 형식·설정이 바뀌었다면 AGENTS.md도 고쳐 주세요."
           fi
