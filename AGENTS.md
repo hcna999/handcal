@@ -24,7 +24,7 @@
 | `config.js` | 공개 설정: `GOOGLE_CLIENT_ID`, `WORKER_URL` (비밀값 아님) |
 | `sw.js` | 서비스 워커(오프라인 캐시, 네트워크 우선). `CACHE = 'handcal-vNN'` |
 | `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, 손글씨 OCR(Gemini) 및 주기적 정밀 다듬기(Cron + `/refine/*`) |
-| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = ["0 18 * * *"]`) |
+| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = []` — 서버 예약 다듬기는 꺼 둠) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
 | `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집 |
@@ -90,7 +90,7 @@
 - 달력·주간 위 마감 알림 줄(`#due-bar`, `renderDueBar`): `noteIndex`의 할 일만 읽어 `parseDue`로 오늘 마감·기한 지남을 셈. `noteIndex.update` 뒤에도 다시 셈. ×는 그날만 숨김(localStorage `dueBarHidden`).
 - 휴대폰 하루 화면은 위쪽 줄을 한 줄로 두려고 검색 버튼과 '‹ 달력'의 글자(`.back-lbl`)를 숨긴다.
 - 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
-- 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). Antigravity 스케줄 자동화(Argon 모델)가 Chrome DevTools MCP로 접속해 직접 손글씨를 다듬을 수 있도록 `window.argonRefine`(`collectTargets`, `applyResult`) 도우미도 제공한다. 왼쪽 패널(상단 "할 일" 버튼 `#panel-toggle`)에는 일정 칸을 숨기고 **그날 할 일 목록(`#day-todo-list`)·키보드 할 일 즉시 추가(`#day-todo-form`)·패널 아래까지 꽉 차는 넓은 손글씨 할 일 패드(`#day-todo-canvas`, `todoInk` — 쓰기를 멈추면 자동 OCR 인식해 할 일로 등록)**만 표시한다.
+- 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). **손글씨 정밀 다듬기의 주 경로는 Antigravity 스케줄**이다: Argon 모델이 Chrome DevTools MCP로 앱을 열고 `window.argonRefine.collectTargets(일수, 최대개수=10)`(남은 수는 `remaining`)로 대상을 받아 그림을 직접 읽고 `applyResult(...)`로 저장한다. 자동화 창의 로그인은 `connectWithCode`(연결 코드)로 옮긴다. Worker의 유료 예약 다듬기(`/refine/*`, cron)는 꺼 두었고 앱도 토큰을 자동 등록하지 않는다(`registerRefineToken`은 수동용). 왼쪽 패널(상단 "할 일" 버튼 `#panel-toggle`)에는 일정 칸을 숨기고 **그날 할 일 목록(`#day-todo-list`)·키보드 할 일 즉시 추가(`#day-todo-form`)·패널 아래까지 꽉 차는 넓은 손글씨 할 일 패드(`#day-todo-canvas`, `todoInk` — 쓰기를 멈추면 자동 OCR 인식해 할 일로 등록)**만 표시한다.
 - 주간 보기에는 오늘 칸에 현재 시각 빨간 줄(`.wtime-now`)이 표시되고, 할 일 모아보기에서 '완료 보기'를 켜면 완료된 할 일을 한 번에 정리(`#todo-clear-done`, `clearDoneTodos`)할 수 있다.
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
 - 아직 만들지 않은 기능의 버튼은 `data-soon` 속성으로 숨긴다(완성하면 속성을 지운다).
@@ -120,7 +120,7 @@
 | `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
 | `POST /refine/register` | 주기적 다듬기용 구글 리프레시 토큰을 AES-GCM 암호화해 KV(또는 메모리)에 저장 |
 | `GET /refine/status` | 토큰 등록 여부·이번 달 추정 비용·마지막 실행 결과 확인 |
-| `POST /refine/run` | 단일 탭 즉시 다듬기(`image`+`draft` 전달) 또는 드라이브 일괄 스캔 다듬기(`?dry=1` 지원). `scheduled()` 크론도 같은 로직 사용 |
+| `POST /refine/run` | 단일 탭 즉시 다듬기(`image`+`draft` 전달) 또는 드라이브 일괄 스캔 다듬기(`?dry=1` 지원). `scheduled()` 크론도 같은 로직(지금은 cron 꺼 둠, 토큰 없으면 조용히 건너뜀) |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
 
 - 구글 토큰과 `OWNER_EMAIL`로 주인만 쓸 수 있다.

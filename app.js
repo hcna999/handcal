@@ -3511,7 +3511,8 @@ window.argonRefine = {
       return false;
     }
   },
-  async collectTargets(daysBack = 14) {
+  // limit: 한 번에 돌려줄 최대 탭 수 (그림 base64가 커서 자동화 도구 응답이 잘리지 않게). 남은 건 remaining으로 알려주고 다음 실행 때 처리
+  async collectTargets(daysBack = 14, limit = 10) {
     if (auth.connected()) {
       await Promise.all([notes.syncIndex(), digests.sync(), glossary.sync()]).catch((e) => console.warn(e));
     }
@@ -3544,12 +3545,14 @@ window.argonRefine = {
         });
       }
     }
+    const picked = items.slice(0, Math.max(1, limit));
     return {
       connected: auth.connected(),
       syncStatus: $('#sync-status')?.textContent || '',
       glossary: glossary.words(),
-      count: items.length,
-      items,
+      count: picked.length,
+      remaining: items.length - picked.length,
+      items: picked,
     };
   },
   async applyResult({ date, pageId, sig, text = '', summary = '', todos = [], decisions = [], todoMap = [], newGlossary = [], changes = [], model = 'gemini-4-argon' }) {
@@ -3738,7 +3741,6 @@ async function afterSignIn() {
     glossary.sync().catch(console.warn);
     noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
     prefs.sync().then(() => { renderCalFilter(); rerender(); }).catch(console.warn);
-    registerRefineToken().catch(() => {});
     events.clear();
     rerender();
     await notes.flush();
@@ -3754,7 +3756,7 @@ async function registerRefineToken() {
   await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/refine/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken: rt }),
+    body: JSON.stringify({ refresh_token: rt }),
   });
 }
 
