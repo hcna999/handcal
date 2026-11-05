@@ -48,6 +48,11 @@ export default {
       } else if (url.pathname === '/transcribe' && req.method === 'POST') {
         await requireOwner(req, env);
         body = await transcribe(env, await req.json());
+      } else if (url.pathname === '/link/create' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await linkCreate(env, await req.json());
+      } else if (url.pathname === '/link/claim' && req.method === 'POST') {
+        body = await linkClaim(env, await req.json()); // 아직 로그인 안 된 창이 부르므로 주인 확인 없음(코드 자체가 열쇠)
       } else if (url.pathname === '/refine/register' && req.method === 'POST') {
         await requireOwner(req, env);
         body = await refineRegister(env, await req.json());
@@ -59,7 +64,7 @@ export default {
         const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
         body = await refineRun(env, { dry: url.searchParams.get('dry') === '1', token, body: await req.json().catch(() => ({})) });
       } else if (url.pathname === '/') {
-        body = { ok: true, service: 'handcal', naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: !!env.GEMINI_API_KEY };
+        body = { ok: true, service: 'handcal', link: !!env.HANDCAL_KV, naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: !!env.GEMINI_API_KEY };
       } else return json({ error: 'not_found' }, 404, cors);
       return json(body, 200, cors);
     } catch (e) {
@@ -1055,5 +1060,29 @@ async function refineRun(env, { dry = false, scheduled = false, token: reqToken 
   return { ok: true, dry, refined, totalTokens, costUsd: Math.round(totalCost * 10000) / 10000, spentUsd: Math.round((spentUsd + (dry ? 0 : totalCost)) * 10000) / 10000, budgetUsd };
 }
 
+// ---------- 1회용 연결 코드: 로그인된 기기의 연결 정보를 KV에 5분만 맡기고, 8자리 코드로 한 번만 꺼내 감
+// (Worker는 요청마다 다른 실행 단위에서 돌 수 있어 메모리 보관은 믿을 수 없으므로 KV 필수)
+const LINK_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0·O·1·I 뺌 → 32^8 ≈ 1조 가지
+const linkNorm = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+async function linkCreate(env, body) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing', '서버에 KV 저장소(HANDCAL_KV)가 연결되지 않았어요');
+  const r = String(body?.r || '');
+  if (!r || r.length > 4000) throw httpError(400, 'bad_payload', '연결 정보가 없어요');
+  const rnd = crypto.getRandomValues(new Uint8Array(8));
+  const code = [...rnd].map((b) => LINK_ABC[b % 32]).join('');
+  const a = body?.a && typeof body.a === 'object' ? { token: String(body.a.token || ''), expires: Number(body.a.expires) || 0 } : null;
+  await env.HANDCAL_KV.put('link:' + code, JSON.stringify({ r, a, at: Date.now() }), { expirationTtl: 300 });
+  return { code: code.slice(0, 4) + '-' + code.slice(4), expiresIn: 300 };
+}
+async function linkClaim(env, body) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing', '서버에 KV 저장소(HANDCAL_KV)가 연결되지 않았어요');
+  const code = linkNorm(body?.code);
+  if (code.length !== 8) throw httpError(400, 'bad_code', '코드는 8자리예요');
+  const raw = await env.HANDCAL_KV.get('link:' + code, 'json');
+  if (!raw?.r) throw httpError(404, 'code_not_found', '코드가 없거나 5분이 지났어요');
+  await env.HANDCAL_KV.delete('link:' + code); // 한 번 쓰면 끝
+  return { r: raw.r, a: raw.a };
+}
+
 // 테스트용으로 내보냄 (Workers 런타임에는 영향 없음)
-export const _test = { parseICS, expandEvents, occurrences };
+export const _test = { parseICS, expandEvents, occurrences, linkCreate, linkClaim };

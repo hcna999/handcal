@@ -195,10 +195,22 @@ try {
     await fakeDrive(p);
     let calls = 0;
     const d2 = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const links = new Map();
     await p.route('https://w.test/**', async (r) => {
       if (r.request().method() === 'OPTIONS') return r.fulfill({ headers: H });
-      calls++;
       const u = new URL(r.request().url());
+      // 1회용 연결 코드 (가짜 KV)
+      if (u.pathname === '/link/create') {
+        links.set('ABCD2345', JSON.parse(r.request().postData()));
+        return r.fulfill({ headers: H, contentType: 'application/json', body: JSON.stringify({ code: 'ABCD-2345', expiresIn: 300 }) });
+      }
+      if (u.pathname === '/link/claim') {
+        const code = JSON.parse(r.request().postData()).code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const v = links.get(code);
+        links.delete(code);
+        return r.fulfill({ status: v ? 200 : 404, headers: H, contentType: 'application/json', body: JSON.stringify(v || { error: 'code_not_found', message: '코드가 없거나 5분이 지났어요' }) });
+      }
+      calls++;
       if (u.pathname === '/ocr') {
         return r.fulfill({ headers: H, contentType: 'application/json', body: JSON.stringify({
           text: '금요일까지 견적서 보냄',
@@ -234,6 +246,7 @@ try {
       localStorage.setItem('gtasksOn', 'false');
       localStorage.setItem('auth', JSON.stringify({ token: 't', expires: Date.now() + 3e6 }));
       localStorage.setItem('wasSignedIn', 'true');
+      localStorage.setItem('refresh', JSON.stringify('RT-test'));
     });
     const chips = () => p.$$eval('#grid .chip:not(.spacer)', (x) => x.filter((c) => c.textContent === '보름 일정').length);
     await p.goto(base);
@@ -252,6 +265,17 @@ try {
     await p.waitForSelector('.cell');
     await p.waitForTimeout(300);
     check('다시 열면 저장해 둔 일정이 바로 보임', (await chips()) > 0);
+
+    // 1회용 연결 코드: 만들면 8자리가 보이고, 한 번 꺼내 쓰면 다시는 못 씀
+    await p.click('#settings-btn');
+    await p.click('#token-transfer-btn');
+    await p.click('text=1회용 코드 만들기');
+    await p.waitForSelector('.link-code-num');
+    const code = await p.textContent('.link-code-num');
+    const first = await p.evaluate((c) => claimLinkCode(c).then((x) => x.r), code);
+    const again = await p.evaluate((c) => claimLinkCode(c).then(() => 'ok', (e) => e.message), code.toLowerCase());
+    check('1회용 연결 코드 만들기·한 번만 쓰기', code === 'ABCD-2345' && first === 'RT-test' && again.includes('5분'), `${code} ${first} / ${again}`);
+    await p.click('#modal-close').catch(() => p.keyboard.press('Escape'));
 
     // 손글씨 초벌 변환 시 드라이브 ink/ PNG 저장 + 유료 모델 다듬기 + 초벌 되돌리기
     await p.click('.cell.today');

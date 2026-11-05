@@ -852,3 +852,7 @@ body.in-day .side-backdrop { display: none !important; }
 .news-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .news-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .news-row .muted-text { margin: 4px 0 0; }
+
+/* 1회용 연결 코드 */
+.link-code { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.link-code-num { font-size: 1.6rem; letter-spacing: .12em; font-family: ui-monospace, Menlo, monospace; padding: 6px 12px; border: 1px dashed var(--line); border-radius: 8px; }

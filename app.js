@@ -3488,10 +3488,14 @@ window.argonRefine = {
     if (!raw) return false;
     try {
       let parsed = null;
-      try {
-        parsed = JSON.parse(decodeURIComponent(escape(atob(raw))));
-      } catch {
-        parsed = { r: raw };
+      if (/^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/.test(raw.trim())) {
+        parsed = await claimLinkCode(raw.trim()); // 8자리 1회용 코드
+      } else {
+        try {
+          parsed = JSON.parse(decodeURIComponent(escape(atob(raw))));
+        } catch {
+          parsed = { r: raw };
+        }
       }
       if (parsed?.r) store.set('refresh', parsed.r);
       if (parsed?.a?.token) {
@@ -3763,6 +3767,24 @@ async function registerRefineToken() {
   });
 }
 
+// 8자리 1회용 코드로 연결 정보 받기 (아직 로그인 전이라 주인 확인 없이 부름).
+// 서버 KV는 다른 지역에 퍼지는 데 몇 초 걸릴 수 있어 '없음'이면 잠깐씩 다시 시도
+async function claimLinkCode(code) {
+  if (!CFG.WORKER_URL) throw new Error('중계 서버 주소가 없어요');
+  for (let i = 0; i < 4; i++) {
+    const res = await fetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/link/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.r) return data;
+    if (data.error !== 'code_not_found') throw new Error(data.message || 'HTTP ' + res.status);
+    if (i < 3) await new Promise((r) => setTimeout(r, 4000));
+  }
+  throw new Error('코드가 없거나 5분이 지났어요. 새 코드를 만들어 주세요.');
+}
+
 // 자동화 브라우저(Chrome DevTools)처럼 구글 OAuth 팝업 로그인이 막히는 환경을 위해,
 // 이미 로그인된 기기·브라우저에서 연결 코드를 복사해 붙여넣거나 window.argonRefine.connectWithCode(code)로 연결
 function openTokenTransfer() {
@@ -3772,25 +3794,54 @@ function openTokenTransfer() {
   box.style.display = 'flex';
   box.style.flexDirection = 'column';
   box.style.gap = '10px';
-  const desc = el('p', 'muted-text', '다른 브라우저(또는 안티그래비티 자동화 창)에서 구글 팝업 로그인이 막힐 때, 이미 로그인된 브라우저에서 연결 코드를 복사해 붙여넣으면 바로 같은 구글 드라이브에 연결됩니다.');
+  const desc = el('p', 'muted-text', '다른 브라우저(또는 안티그래비티 자동화 창)에서 구글 팝업 로그인이 막힐 때, 이미 로그인된 브라우저에서 1회용 코드를 만들어 그 창에 넣으면 같은 구글 드라이브에 연결돼요.');
   box.append(desc);
-  box.append(el('p', 'warn-text', '⚠ 이 코드는 구글 드라이브 메모와 할 일을 열 수 있는 열쇠예요. 내 기기끼리만 쓰고 메신저·메일로 다른 사람에게 보내지 마세요. 새어 나갔다면 ⚙ → 로그아웃 후 다시 로그인하면 이전 코드는 못 써요.'));
   if (curRefresh || curAuth?.token) {
-    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({ r: curRefresh, a: curAuth }))));
-    const copyBtn = el('button', 'pill primary', '현재 로그인 연결 코드 복사하기');
-    copyBtn.onclick = async () => {
+    const codeBox = el('div', 'link-code hidden');
+    const makeBtn = el('button', 'pill primary', '1회용 코드 만들기 (5분)');
+    makeBtn.onclick = async () => {
+      makeBtn.disabled = true;
       try {
-        await navigator.clipboard.writeText(payload);
-        toast('연결 코드를 복사했어요! 연결할 창에 붙여넣으세요.');
-      } catch {
-        prompt('아래 연결 코드를 복사하세요:', payload);
+        const res = await authFetch(`${CFG.WORKER_URL.replace(/\/$/, '')}/link/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ r: curRefresh, a: curAuth }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw Object.assign(new Error(data.message || 'HTTP ' + res.status), { code: data.error });
+        codeBox.replaceChildren(el('strong', 'link-code-num', data.code), el('span', 'muted-text', '5분 안에 한 번만 쓸 수 있어요. 쓰면 바로 없어져요.'));
+        codeBox.classList.remove('hidden');
+        navigator.clipboard?.writeText(data.code).catch(() => {});
+      } catch (e) {
+        if (e.code === 'kv_missing') showLongCode();
+        else handleErr(e);
+      } finally {
+        makeBtn.disabled = false;
       }
     };
-    box.append(copyBtn);
+    // 서버에 KV가 없을 때만: 예전 긴 연결 코드(리프레시 토큰 자체)
+    const showLongCode = () => {
+      const payload = btoa(unescape(encodeURIComponent(JSON.stringify({ r: curRefresh, a: curAuth }))));
+      const copyBtn = el('button', 'pill', '긴 연결 코드 복사하기');
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(payload);
+          toast('연결 코드를 복사했어요! 연결할 창에 붙여넣으세요.');
+        } catch {
+          prompt('아래 연결 코드를 복사하세요:', payload);
+        }
+      };
+      codeBox.replaceChildren(
+        el('p', 'warn-text', '⚠ 서버에 1회용 코드 저장소가 없어 긴 코드를 써야 해요. 이 코드는 구글 드라이브 메모와 할 일을 열 수 있는 열쇠예요. 내 기기끼리만 쓰고 다른 사람에게 보내지 마세요. 새어 나갔다면 ⚙ → 로그아웃 후 다시 로그인하면 이전 코드는 못 써요.'),
+        copyBtn,
+      );
+      codeBox.classList.remove('hidden');
+    };
+    box.append(makeBtn, codeBox);
   }
   const input = el('input');
   input.type = 'text';
-  input.placeholder = '복사한 연결 코드를 여기에 붙여넣기';
+  input.placeholder = '받은 코드 넣기 (예: K7P2-Q9XM)';
   input.style.padding = '8px 10px';
   input.style.border = '1px solid var(--line)';
   input.style.borderRadius = '8px';

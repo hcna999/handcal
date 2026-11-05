@@ -12,6 +12,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # KV 저장소 'handcal'을 찾거나 만들어 HANDCAL_KV로 연결 (1회용 연결 코드·캘린더 목록 보관)
+      # 토큰에 KV 권한이 없으면 건너뛰고 KV 없이 배포 (해당 기능만 꺼짐)
+      - name: KV 저장소 연결
+        continue-on-error: true
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces"
+          id=$(curl -sf -H "Authorization: Bearer $CF_TOKEN" "$api?per_page=100" | jq -r '.result[] | select(.title=="handcal") | .id' | head -1)
+          if [ -z "$id" ]; then
+            id=$(curl -sf -X POST -H "Authorization: Bearer $CF_TOKEN" -H 'Content-Type: application/json' -d '{"title":"handcal"}' "$api" | jq -r '.result.id // empty')
+          fi
+          if [ -n "$id" ]; then
+            printf '\n[[kv_namespaces]]\nbinding = "HANDCAL_KV"\nid = "%s"\n' "$id" >> worker/wrangler.toml
+            echo "KV 연결함"
+          else
+            echo "::warning title=KV 없음::Cloudflare 토큰에 Workers KV 권한이 없어 KV 없이 배포해요. 1회용 연결 코드는 꺼져요."
+          fi
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

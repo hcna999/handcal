@@ -24,7 +24,7 @@
 | `config.js` | 공개 설정: `GOOGLE_CLIENT_ID`, `WORKER_URL` (비밀값 아님) |
 | `sw.js` | 서비스 워커(오프라인 캐시, 네트워크 우선). `CACHE = 'handcal-vNN'` |
 | `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, 손글씨 OCR(Gemini) 및 주기적 정밀 다듬기(Cron + `/refine/*`) |
-| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = []` — 서버 예약 다듬기는 꺼 둠) |
+| `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = []` — 서버 예약 다듬기는 꺼 둠). KV는 배포 워크플로가 Cloudflare API로 'handcal' 저장소를 찾거나 만들어 `HANDCAL_KV`로 붙임(토큰에 KV 권한 없으면 건너뜀) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
 | `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집 |
@@ -120,6 +120,8 @@
 | `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용. 응답 `{events, calendars:[{name,color}], warnings, stats}` |
 | `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`, 개인 용어집 `glossary` 포함) |
 | `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
+| `POST /link/create` | (주인) 로그인된 기기의 연결 정보(`r` 리프레시 토큰, `a` 접근 토큰)를 KV `link:<코드>`에 5분 보관하고 8자리 1회용 코드(`ABCD-2345`, 0·O·1·I 제외) 돌려줌 |
+| `POST /link/claim` | (주인 확인 없음, 코드가 열쇠) 코드로 연결 정보를 한 번만 꺼내고 바로 지움. KV 없으면 `501 kv_missing` → 앱은 예전 긴 코드로 대신함 |
 | `POST /refine/register` | 주기적 다듬기용 구글 리프레시 토큰을 AES-GCM 암호화해 KV(또는 메모리)에 저장 |
 | `GET /refine/status` | 토큰 등록 여부·이번 달 추정 비용·마지막 실행 결과 확인 |
 | `POST /refine/run` | 단일 탭 즉시 다듬기(`image`+`draft` 전달) 또는 드라이브 일괄 스캔 다듬기(`?dry=1` 지원). `scheduled()` 크론도 같은 로직(지금은 cron 꺼 둠, 토큰 없으면 조용히 건너뜀) |
