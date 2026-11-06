@@ -88,7 +88,7 @@ function cssVar(name) {
 
 // 다크 모드에서는 검은 잉크를 밝게 보여줌 (저장되는 색은 그대로). AI 변환 이미지는 항상 밝은 바탕
 let darkInk = false;
-const DARK_INK = { '#1f2328': '#e8eaed' };
+const DARK_INK = { '#1f2328': '#e8eaed', '#2563eb': '#60a5fa' };
 const inkColor = (c) => (darkInk && DARK_INK[c]) || c;
 
 function drawPaper(ctx) {
@@ -126,7 +126,7 @@ function drawStroke(ctx, s, live = false) {
   ctx.strokeStyle = ctx.fillStyle = inkColor(s.color);
   if (s.tool === 'hl') {
     const q = smoothPoints(uniquePoints(p), 0.5);
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = darkInk ? 0.45 : 0.35;
     ctx.lineWidth = s.size;
     ctx.beginPath();
     ctx.moveTo(q[0][0], q[0][1]);
@@ -636,7 +636,84 @@ function setFingerDraw(v) {
   $('#finger-mode').textContent = v ? '손가락: 필기' : '손가락: 화면 이동';
 }
 
+// ---------- 펜 즐겨찾기 프리셋
+const DEFAULT_PRESETS = [
+  { tool: 'pen', color: '#1f2328', sizeIdx: 1, name: '검정' },
+  { tool: 'pen', color: '#2563eb', sizeIdx: 1, name: '파랑' },
+  { tool: 'pen', color: '#dc2626', sizeIdx: 1, name: '빨강' },
+  { tool: 'hl',  color: '#facc15', sizeIdx: 1, name: '형광' },
+];
+
+function getPenPresets() {
+  return store.get('penPresets', DEFAULT_PRESETS);
+}
+
+function savePenPreset(idx) {
+  const list = getPenPresets().slice();
+  const tool = pad.tool === 'eraser' || pad.tool === 'lasso' ? 'pen' : pad.tool;
+  const color = pad.colors[tool] || COLORS[0];
+  const sizeIdx = pad.sizeIdx;
+  list[idx] = { tool, color, sizeIdx, name: tool === 'hl' ? '형광' : (color === '#1f2328' ? '검정' : color === '#2563eb' ? '파랑' : color === '#dc2626' ? '빨강' : '펜') };
+  store.set('penPresets', list);
+  buildPresets();
+  toast(`프리셋 ${idx + 1}번에 현재 펜을 저장했어요`);
+}
+
+function applyPreset(idx) {
+  const p = getPenPresets()[idx] || DEFAULT_PRESETS[idx];
+  pad.tool = p.tool;
+  pad.colors[p.tool] = p.color;
+  pad.sizeIdx = p.sizeIdx;
+  if (pad.tool !== 'lasso') lasso.clear();
+  store.set('colors', pad.colors);
+  store.set('sizeIdx', pad.sizeIdx);
+  syncToolbar();
+}
+
+function buildPresets() {
+  const box = $('#pen-presets');
+  if (!box) return;
+  box.replaceChildren();
+  const list = getPenPresets();
+  list.forEach((p, idx) => {
+    const btn = el('button', 'preset-btn');
+    btn.type = 'button';
+    btn.dataset.presetIdx = idx;
+    btn.title = `프리셋 ${idx + 1}: ${p.tool === 'hl' ? '형광펜' : '펜'} (길게 눌러 현재 펜 저장)`;
+    btn.setAttribute('aria-label', btn.title);
+
+    const dot = el('span', 'preset-dot');
+    dot.style.background = p.color;
+    const lbl = el('span', 'preset-lbl', p.tool === 'hl' ? 'H' : 'P');
+    btn.append(dot, lbl);
+
+    btn.onclick = () => applyPreset(idx);
+    btn.oncontextmenu = (e) => { e.preventDefault(); savePenPreset(idx); };
+    let timer = null;
+    btn.addEventListener('pointerdown', () => {
+      timer = setTimeout(() => { timer = null; savePenPreset(idx); }, 600);
+    });
+    btn.addEventListener('pointerup', () => clearTimeout(timer));
+    btn.addEventListener('pointercancel', () => clearTimeout(timer));
+
+    box.append(btn);
+  });
+  syncPresets();
+}
+
+function syncPresets() {
+  const box = $('#pen-presets');
+  if (!box) return;
+  const list = getPenPresets();
+  box.querySelectorAll('.preset-btn').forEach((b, idx) => {
+    const p = list[idx];
+    const active = p && pad.tool === p.tool && pad.colors[p.tool] === p.color && pad.sizeIdx === p.sizeIdx;
+    b.classList.toggle('active', !!active);
+  });
+}
+
 function buildToolbar() {
+  buildPresets();
   const colors = $('#colors');
   for (const c of COLORS) {
     const b = el('button', 'swatch');
@@ -659,6 +736,7 @@ function buildToolbar() {
 }
 
 function syncToolbar() {
+  syncPresets();
   document.querySelectorAll('.tool').forEach((b) => b.classList.toggle('active', b.dataset.tool === pad.tool));
   const color = pad.colors[pad.tool];
   document.querySelectorAll('.swatch').forEach((b) => b.classList.toggle('active', b.dataset.color === color));

@@ -32,7 +32,7 @@
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
-| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~9단계 완료, 10단계 후보) |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~10단계 완료) |
 
 ## 앱 코드 파일 (js/, 읽히는 순서)
 
@@ -42,13 +42,13 @@
 | 2 | `events.js` | 메모 일정(`memos`), 네이버(`naver`), 일정 보관·미리 받기(`events`), 화면 상태(`state`) |
 | 3 | `calendar.js` | 월간·주간 달력, 메모 모아보기, 할 일 모아보기·기한 읽기(`parseDue`)·마감 알림 줄, 음력·공휴일, 전체 검색 |
 | 4 | `export.js` | 내보내기(마크다운·PDF·공유) |
-| 5 | `day.js` | 하루 화면(필기장 그리기·입력), 확대·축소, 종이 배경, 펜 압력, 올가미 |
+| 5 | `day.js` | 하루 화면(필기장 그리기·입력), 확대·축소, 종이 배경, 펜 압력, 올가미, 펜 즐겨찾기 프리셋 |
 | 6 | `tabs.js` | 탭 추가·삭제·전환·타자/손글씨 바꾸기, 하루 할 일 패널 |
 | 7 | `ocr.js` | 손글씨 → 글자(자동 변환 대기열 `autoOcr`), 달력 요약(`digests`), 초벌/다듬기, 안티그래비티 도우미 `window.argonRefine` |
 | 8 | `sync.js` | 동기화 상태 점, 로그인 UI·`afterSignIn`, 연결 코드(1회용), 구글 Tasks(`gtasks`) |
 | 9 | `media.js` | 사진·음성 탭 |
 | 10 | `stores.js` | `syncedStore`, 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
-| 11 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면, 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
+| 11 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면(통계 요약 배지), 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
 | 12 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
 | 13 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
 
@@ -112,8 +112,8 @@
 - 휴대폰 하루 화면은 위쪽 줄을 한 줄로 두려고 검색 버튼과 '‹ 달력'의 글자(`.back-lbl`)를 숨긴다.
 - 목표(`js/goals.js`): 보기 전환의 `목표`(`#goals-view`, `renderGoalsView`)에서 버킷리스트와 연간·월간·주간 목표를 적고, 고치고, 달성 표시하고, 지운다. 단계끼리 연결하지 않는 독립된 목록이다. 할 일을 적을 때 보도록 할 일 패널 위 `#goal-panel`과 하루 화면 맨 위 `#goal-line`에 사다리(`renderDayGoals`)를 그린다. 기준은 오늘이 아니라 **열어 둔 날짜**이고, 넓은 화면에서 패널이 열려 있으면 `#goal-line`은 숨긴다. 줄을 누르면 하루 화면을 떠나지 않고 목표 창(`openGoalModal`)이 열린다. 버킷리스트 줄은 못 이룬 것 가운데 날마다 하나(`bucketPick`, ↻는 기기별 `bucketSpin`)를 보여 준다. 달력·주간 위 `#goal-bar`(`renderGoalBar`)는 월·주 목표 한 줄이다. 못 끝낸 목표는 자동으로 넘기지 않고, 지금 기간을 볼 때 바로 앞 기간 것만 보여 주며 옮기기 버튼(`goals.moveTo`)으로 옮긴다.
 - 900px 미만(휴대폰·폴드·아이패드 세로): 보기 전환 [월·주·메모·할 일·목표]는 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
-- 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). **손글씨 정밀 다듬기의 주 경로는 Antigravity 스케줄**이다: Argon 모델이 Chrome DevTools MCP로 앱을 열고 `window.argonRefine.collectTargets(일수, 최대개수=10)`(남은 수는 `remaining`)로 대상을 받아 그림을 직접 읽고 `applyResult(...)`로 저장한다. 자동화 창의 로그인은 `connectWithCode`(연결 코드)로 옮긴다. Worker의 유료 예약 다듬기(`/refine/*`, cron)는 꺼 두었고 앱도 토큰을 자동 등록하지 않는다(`registerRefineToken`은 수동용). 왼쪽 패널(상단 "할 일" 버튼 `#panel-toggle`)에는 일정 칸을 숨기고 **그날 할 일 목록(`#day-todo-list`)·키보드 할 일 즉시 추가(`#day-todo-form`)·패널 아래까지 꽉 차는 넓은 손글씨 할 일 패드(`#day-todo-canvas`, `todoInk` — 쓰기를 멈추면 자동 OCR 인식해 할 일로 등록)**만 표시한다.
-- 주간 보기에는 오늘 칸에 현재 시각 빨간 줄(`.wtime-now`)이 표시되고, 할 일 모아보기에서 '완료 보기'를 켜면 완료된 할 일을 한 번에 정리(`#todo-clear-done`, `clearDoneTodos`)할 수 있다.
+- 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄(펜·형광펜·지우개·올가미 및 4색 펜 퀵 프리셋 `#pen-presets`) → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). **손글씨 정밀 다듬기의 주 경로는 Antigravity 스케줄**이다: Argon 모델이 Chrome DevTools MCP로 앱을 열고 `window.argonRefine.collectTargets(일수, 최대개수=10)`(남은 수는 `remaining`)로 대상을 받아 그림을 직접 읽고 `applyResult(...)`로 저장한다. 자동화 창의 로그인은 `connectWithCode`(연결 코드)로 옮긴다. Worker의 유료 예약 다듬기(`/refine/*`, cron)는 꺼 두었고 앱도 토큰을 자동 등록하지 않는다(`registerRefineToken`은 수동용). 왼쪽 패널(상단 "할 일" 버튼 `#panel-toggle`)에는 일정 칸을 숨기고 **그날 할 일 목록(`#day-todo-list`)·키보드 할 일 즉시 추가(`#day-todo-form`)·패널 아래까지 꽉 차는 넓은 손글씨 할 일 패드(`#day-todo-canvas`, `todoInk` — 쓰기를 멈추면 자동 OCR 인식해 할 일로 등록)**만 표시한다.
+- 주간 보기에는 오늘 칸에 현재 시각 빨간 줄(`.wtime-now`)이 표시되고, 시간표의 시간 라벨(`.wtime-hour`)을 누르면 그 시각 일정 빠른 추가 창이 열리며, 메모 일정을 누르면 하루 화면 편집으로 바로 연결된다. 할 일 모아보기에서 '완료 보기'를 켜면 완료된 할 일을 한 번에 정리(`#todo-clear-done`, `clearDoneTodos`)할 수 있다.
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
 - 아직 만들지 않은 기능의 버튼은 `data-soon` 속성으로 숨긴다(완성하면 속성을 지운다).
 

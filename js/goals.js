@@ -301,6 +301,34 @@ function goalSection(ctx, focus = false) {
   return sec;
 }
 
+// ---------- 목표 달성 통계 요약 배지
+function goalStatsBar() {
+  const now = new Date();
+  const yList = goals.list('year', goalPeriod('year', now));
+  const mList = goals.list('month', goalPeriod('month', now));
+  const wList = goals.list('week', goalPeriod('week', now));
+  const bList = goals.list('bucket');
+
+  const yDone = yList.filter((g) => g.doneAt).length;
+  const mDone = mList.filter((g) => g.doneAt).length;
+  const wDone = wList.filter((g) => g.doneAt).length;
+  const bDone = bList.filter((g) => g.doneAt).length;
+
+  const bar = el('div', 'goals-stats-bar');
+  const makeBadge = (label, done, total) => {
+    const b = el('div', 'goal-stat-badge');
+    b.append(el('span', 'goal-stat-label', label), el('strong', 'goal-stat-num', total != null ? `${done}/${total}` : `${done}개`));
+    return b;
+  };
+  bar.append(
+    makeBadge('올해 달성', yDone, yList.length),
+    makeBadge('이달 달성', mDone, mList.length),
+    makeBadge('이번 주 달성', wDone, wList.length),
+    makeBadge('이룬 버킷', bDone, null)
+  );
+  return bar;
+}
+
 // ---------- 목표 화면
 const goalView = { ctxs: null };
 function renderGoalsView(focusLevel = null) {
@@ -308,7 +336,7 @@ function renderGoalsView(focusLevel = null) {
   if (!goalView.ctxs) {
     goalView.ctxs = GOAL_ORDER.map((level) => ({ level, date: new Date(), rerender: () => renderGoalsView() }));
   }
-  $('#goals-body').replaceChildren(...goalView.ctxs.map((ctx) => goalSection(ctx, ctx.level === focusLevel)));
+  $('#goals-body').replaceChildren(goalStatsBar(), ...goalView.ctxs.map((ctx) => goalSection(ctx, ctx.level === focusLevel)));
 }
 
 // ---------- 목표 창 (하루 화면·달력에서 그 자리를 떠나지 않고 고치기)

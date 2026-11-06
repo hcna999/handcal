@@ -42,8 +42,8 @@
   --cell-other: #16181b;
   --input: #14161a;
   --paper: #1e2024;
-  --paper-line: #2a2d33;
-  --page-break: #444a53;
+  --paper-line: #33373f;
+  --page-break: #4f5663;
   --is-dark: 1;
   color-scheme: dark;
   }
@@ -66,8 +66,8 @@
   --cell-other: #16181b;
   --input: #14161a;
   --paper: #1e2024;
-  --paper-line: #2a2d33;
-  --page-break: #444a53;
+  --paper-line: #33373f;
+  --page-break: #4f5663;
   --is-dark: 1;
   color-scheme: dark;
 }
@@ -914,3 +914,71 @@ body.in-day .side-backdrop { display: none !important; }
   body:not(.side-on) .side-badge { position: absolute; top: 1px; right: 1px; min-width: 1rem; padding: 0 3px; font-size: 0.62rem; line-height: 1rem; }
 }
 @media (pointer: coarse) { .side-nav button { min-height: 2.75rem; } }
+
+/* ---------- 10단계 추가 스타일 ---------- */
+/* 펜 즐겨찾기 프리셋 */
+#pen-presets { display: flex; align-items: center; gap: 4px; }
+.preset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted-strong);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color .15s, background .15s;
+}
+.preset-btn:hover { border-color: var(--muted); }
+.preset-btn .preset-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, .15);
+}
+.preset-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+@media (max-width: 599px) {
+  .preset-btn { padding: 0 5px; height: 26px; }
+  .preset-btn .preset-lbl { display: none; }
+}
+
+/* 주간 시간표 인터랙션 */
+.wtime-hour { cursor: pointer; transition: color .15s; border-radius: 4px; }
+.wtime-hour:hover { color: var(--accent); font-weight: 700; background: var(--hover); }
+.wtime-ev { cursor: pointer; transition: opacity .15s; }
+.wtime-ev:hover { opacity: .9; }
+
+/* 목표 통계 배지 바 */
+.goals-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+.goal-stat-badge {
+  flex: 1 1 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.goal-stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 2px; }
+.goal-stat-num { font-size: 1.05rem; font-weight: 700; color: var(--accent); }

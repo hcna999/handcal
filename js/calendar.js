@@ -121,6 +121,33 @@ function weekTimeline(day, timed, weekEvs) {
   for (let h = h0; h < h1; h++) {
     const line = el('div', 'wtime-hour', `${h}`);
     line.style.top = `calc(${h - h0} * var(--hour-h))`;
+    line.title = `${h}시 (눌러서 일정 추가)`;
+    line.onclick = (e) => {
+      e.stopPropagation();
+      const ds = ymd(day);
+      const sh = pad2(h), eh = pad2(Math.min(23, h + 1));
+      showMenu(e, [
+        {
+          label: `${h}시 메모 일정 추가`,
+          icon: 'check',
+          keepOpen: true,
+          fn: () => showMenu(null, [{
+            input: {
+              placeholder: `${h}시 일정 제목`,
+              onSubmit: async (v) => {
+                if (!v.trim()) return;
+                const start = new Date(`${ds}T${sh}:00:00`);
+                const end = new Date(`${ds}T${eh}:00:00`);
+                memos.add({ title: v.trim(), start, end, allDay: false });
+                rerender();
+                toast(`${ds} ${h}시에 일정을 추가했어요`);
+              }
+            }
+          }])
+        },
+        { label: `${ds} 하루 열기`, icon: 'pen', fn: () => openDay(ds) },
+      ]);
+    };
     box.append(line);
   }
   // 겹치는 일정은 옆으로 나란히
@@ -140,6 +167,15 @@ function weekTimeline(day, timed, weekEvs) {
   for (const it of items) {
     const b = el('div', 'wtime-ev', `${hm(it.e.start)} ${it.e.title}`);
     b.title = `${hm(it.e.start)}–${hm(it.e.end)} ${it.e.title}`;
+    if (it.e.isMemo) {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        openDay(ymd(it.e.start)).then(() => {
+          setPanel(true);
+          startEditEvent(it.e);
+        });
+      };
+    }
     b.style.top = `calc(${it.a - h0} * var(--hour-h))`;
     b.style.height = `calc(${it.b - it.a} * var(--hour-h) - 2px)`;
     b.style.left = `calc(1.2rem + (100% - 1.2rem) * ${it.lane / lanes.length})`;

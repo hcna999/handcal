@@ -354,6 +354,8 @@ try {
   await s.click('#view-seg [data-view=week]');
   await s.click('#side-nav [data-nav=goals]');
   await s.waitForTimeout(100);
+  const statsBadges = await s.$$eval('.goal-stat-badge', (bs) => bs.length);
+  check('목표 화면 통계 배지 바 4개', statsBadges === 4);
   check('목표 화면은 월·주와 캘린더 목록 숨김', (await s.isVisible('#goals-view')) && !(await s.isVisible('#view-seg')) && !(await s.isVisible('#cal-filter')) && (await s.isVisible('.mini-cal')));
   await s.click('#side-nav [data-nav=cal]');
   await s.waitForTimeout(100);
@@ -377,6 +379,13 @@ try {
   await s.evaluate(() => openDay(ymd(new Date())));
   await s.waitForTimeout(300);
   check('하루 화면에서는 메뉴·월주 숨김', !(await s.isVisible('#cal-side')) && !(await s.isVisible('#view-seg')));
+  await s.evaluate(() => openInkTab());
+  await s.waitForSelector('#pen-presets');
+  const presetsCount = await s.$$eval('.preset-btn', (bs) => bs.length);
+  check('펜 즐겨찾기 프리셋 4개', presetsCount === 4);
+  await s.click('.preset-btn[data-preset-idx="1"]');
+  const isBlue = await s.evaluate(() => pad.colors.pen === '#2563eb' && pad.tool === 'pen');
+  check('펜 프리셋 선택으로 파랑펜 전환', isBlue);
   await sideCtx.close();
 
   // 폴드 펼침: 아래 탭, 상단 월·주와 사이드 메뉴 없음
@@ -410,6 +419,9 @@ try {
   await goView(n, 'week');
   await n.waitForTimeout(200);
   check('주간 보기 지금 시각 줄', (await n.$$('.wtime-now')).length === 1);
+  await n.click('.wtime-hour');
+  const menuOpened = await n.waitForSelector('#pop-menu:not(.hidden)', { timeout: 1000 }).then(() => true).catch(() => false);
+  check('주간 시간표 시간 클릭 시 메뉴 열림', menuOpened);
   await noonCtx.close();
 } finally {
   await browser.close();
