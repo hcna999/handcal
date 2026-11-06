@@ -37,6 +37,17 @@ const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); };
 const errors = [];
 
+// 넓은 화면: 메모·할 일·목표는 사이드 메뉴, 월·주는 달력일 때만 위에 보임. 좁은 화면: 아래 탭
+const goView = async (pg, v) => {
+  const sel = `[data-view=${v}] >> visible=true`;
+  if (await pg.locator(sel).count()) return pg.click(sel);
+  if (v === 'month' || v === 'week') {
+    await pg.click('#side-nav [data-nav=cal]');
+    return pg.click(sel);
+  }
+  return pg.click(`#side-nav [data-nav=${v}]`);
+};
+
 const browser = await chromium.launch();
 try {
   const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block', acceptDownloads: true });
@@ -81,10 +92,10 @@ try {
   await p.waitForTimeout(600);
   await p.click('#back-btn');
   await p.waitForTimeout(300);
-  await p.click('[data-view=todo] >> visible=true');
+  await goView(p, 'todo');
   await p.waitForTimeout(600);
   check('할 일 기한순 묶음', (await p.$$eval('#todo-items .todo-date', (x) => x.map((i) => i.textContent))).some((t) => t.startsWith('내일')));
-  await p.click('[data-view=week] >> visible=true');
+  await goView(p, 'week');
   await p.waitForTimeout(400);
   check('주간 시간표 (겹치는 일정 나란히)', (await p.$$('.wtime-ev')).length === 2);
   await p.keyboard.press('Control+K');
@@ -134,7 +145,7 @@ try {
   await p.waitForTimeout(600);
   await p.click('#back-btn');
   await p.waitForTimeout(400);
-  await p.click('[data-view=month] >> visible=true');
+  await goView(p, 'month');
   // 왼쪽 캘린더 목록: '메모 일정'을 끄면 달력에서 사라지고, 켜면 돌아옴
   const chips = () => p.$$eval('.cell.today .chip:not(.spacer)', (x) => x.map((i) => i.textContent).join(' '));
   check('왼쪽 캘린더 목록 창', (await p.isVisible('#cal-side')) && (await p.$$('.mini-day')).length >= 28);
@@ -158,14 +169,14 @@ try {
   await p.waitForTimeout(400);
   await p.click('#back-btn');
   await p.waitForTimeout(500);
-  await p.click('[data-view=month] >> visible=true');
+  await goView(p, 'month');
   await p.waitForTimeout(300);
   const dueText = (await p.isVisible('#due-bar')) ? await p.textContent('#due-open') : '';
   check('달력 위 오늘 마감 알림 줄', dueText.includes('오늘 마감'), dueText);
   await p.click('#due-open');
   await p.waitForTimeout(400);
   check('알림 줄 누르면 할 일 보기', await p.isVisible('#todo-view'));
-  await p.click('[data-view=month] >> visible=true');
+  await goView(p, 'month');
   await p.click('#due-close');
   check('× 누르면 오늘은 숨김', !(await p.isVisible('#due-bar')));
 
@@ -220,7 +231,7 @@ try {
 
   // 목표: 목표 화면에서 적기, 버킷리스트 이루기, 못 끝낸 목표 옮기기, 달력 위 한 줄, 하루 화면 사다리
   await p.evaluate(() => $('#settings').classList.add('hidden'));
-  await p.click('[data-view=goals] >> visible=true');
+  await goView(p, 'goals');
   await p.waitForTimeout(100);
   check('목표 화면 네 단계', (await p.$$('#goals-view .goal-sec')).length === 4 && (await p.textContent('#month-title')) === '목표');
   const addGoal = async (scope, level, text) => {
@@ -264,15 +275,15 @@ try {
   check('목표 지우고 되돌리기', !afterDel.includes('이번주 목표B2') && (await p.textContent('#goals-view .goal-sec[data-level=week]')).includes('이번주 목표B2'));
 
   // 달력·주간 위 한 줄
-  await p.click('[data-view=month] >> visible=true');
+  await goView(p, 'month');
   await p.waitForTimeout(100);
   const monthBar = await p.textContent('#goal-bar');
   check('달력 위 월간 목표', monthBar.includes('이달 목표A'), monthBar);
-  await p.click('[data-view=week] >> visible=true');
+  await goView(p, 'week');
   await p.waitForTimeout(100);
   const weekBar = await p.textContent('#goal-bar');
   check('주간 위 주간 목표', weekBar.includes('이번주 목표A') && weekBar.includes('외 2'), weekBar);
-  await p.click('[data-view=month] >> visible=true');
+  await goView(p, 'month');
   await p.waitForTimeout(100);
 
   // 하루 화면: 왼쪽 패널에 네 단계, 패널을 닫으면 위쪽 한 줄
@@ -329,6 +340,60 @@ try {
   check('휴대폰 탭 5개·옆으로 안 넘침', fit.tabs === 5 && fit.over <= 0 && fit.inner <= 0, JSON.stringify(fit));
   await phone.close();
 
+  // 왼쪽 메뉴·상단 월주: 넓은 화면
+  const sideCtx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+  const s = await sideCtx.newPage();
+  s.on('pageerror', (e) => errors.push(e.message));
+  await s.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await s.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await s.addInitScript(() => { localStorage.setItem('onboarded', 'true'); localStorage.setItem('installHintClosed', 'true'); });
+  await s.goto(base);
+  await s.waitForSelector('.cell');
+  check('상단에는 월·주만', (await s.$$('#view-seg button')).length === 2 && (await s.isVisible('#view-seg')) && !(await s.isVisible('#bottom-tabs')));
+  check('사이드 메뉴 네 개', (await s.$$('#side-nav button')).length === 4 && (await s.getAttribute('#side-nav [data-nav=cal]', 'aria-current')) === 'page');
+  await s.click('#view-seg [data-view=week]');
+  await s.click('#side-nav [data-nav=goals]');
+  await s.waitForTimeout(100);
+  check('목표 화면은 월·주와 캘린더 목록 숨김', (await s.isVisible('#goals-view')) && !(await s.isVisible('#view-seg')) && !(await s.isVisible('#cal-filter')) && (await s.isVisible('.mini-cal')));
+  await s.click('#side-nav [data-nav=cal]');
+  await s.waitForTimeout(100);
+  check('달력으로 돌아오면 보던 주간 보기', (await s.isVisible('#week-grid')) && (await s.isVisible('#cal-filter')));
+  await s.click('#side-btn');
+  const rail = await s.evaluate(() => ({ w: $('#cal-side').getBoundingClientRect().width, mini: !!$('.mini-cal').offsetParent, label: !!$('.side-nav-label').offsetParent, btn: !!$('#side-nav [data-nav=todo]').offsetParent }));
+  check('닫으면 아이콘 줄만 남음', rail.w < 70 && !rail.mini && !rail.label && rail.btn, JSON.stringify(rail));
+  await s.click('#side-nav [data-nav=todo]');
+  await s.waitForTimeout(100);
+  check('아이콘 줄에서 바로 이동', await s.isVisible('#todo-view'));
+  await s.evaluate(() => openDay(ymd(new Date())));
+  await s.waitForTimeout(300);
+  await s.click('#text-page');
+  await s.keyboard.type('☐ 오늘까지 보고서');
+  await s.waitForTimeout(500);
+  await s.click('#back-btn');
+  await s.waitForTimeout(400);
+  const badge = await s.evaluate(() => { const b = $('#side-todo-badge'); return { text: b.textContent, over: b.classList.contains('over'), on: !!b.offsetParent }; });
+  check('할 일 마감 개수 표시', badge.text === '1' && badge.on, JSON.stringify(badge));
+  await s.click('#side-btn');
+  await s.evaluate(() => openDay(ymd(new Date())));
+  await s.waitForTimeout(300);
+  check('하루 화면에서는 메뉴·월주 숨김', !(await s.isVisible('#cal-side')) && !(await s.isVisible('#view-seg')));
+  await sideCtx.close();
+
+  // 폴드 펼침: 아래 탭, 상단 월·주와 사이드 메뉴 없음
+  const foldCtx = await browser.newContext({ viewport: { width: 884, height: 1028 }, serviceWorkers: 'block' });
+  const f = await foldCtx.newPage();
+  f.on('pageerror', (e) => errors.push(e.message));
+  await f.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await f.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await f.addInitScript(() => { localStorage.setItem('onboarded', 'true'); localStorage.setItem('installHintClosed', 'true'); });
+  await f.goto(base);
+  await f.waitForSelector('.cell');
+  check('폴드 펼침은 아래 탭', (await f.isVisible('#bottom-tabs')) && !(await f.isVisible('#view-seg')) && !(await f.isVisible('#side-nav')));
+  await f.click('#bottom-tabs [data-view=goals]');
+  await f.waitForTimeout(100);
+  check('폴드 펼침 아래 탭으로 이동', await f.isVisible('#goals-view'));
+  await foldCtx.close();
+
   // 주간 보기 지금 시각 줄: 시간표 범위(기본 8~21시) 안에서만 그려지므로 낮 12시로 고정해서 확인.
   // 가짜 시계는 토스트 타이머까지 흔들 수 있어 다른 시험과 섞이지 않게 따로 띄움
   const noonCtx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
@@ -342,7 +407,7 @@ try {
   await n.clock.setFixedTime(noon);
   await n.goto(base);
   await n.waitForSelector('.cell');
-  await n.click('[data-view=week] >> visible=true');
+  await goView(n, 'week');
   await n.waitForTimeout(200);
   check('주간 보기 지금 시각 줄', (await n.$$('.wtime-now')).length === 1);
   await noonCtx.close();

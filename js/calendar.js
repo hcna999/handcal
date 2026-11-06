@@ -50,6 +50,15 @@ function renderMonth() {
     b.setAttribute('aria-selected', String(b.dataset.view === state.calView));
   });
   const v = state.calView;
+  const isCal = v === 'month' || v === 'week';
+  document.querySelectorAll('#side-nav button').forEach((b) => {
+    const on = b.dataset.nav === (isCal ? 'cal' : v);
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
+  $('#view-seg').classList.toggle('hidden', !isCal);
+  $('#cal-side').classList.toggle('non-cal', !isCal);
   $('#grid').classList.toggle('hidden', v !== 'month');
   $('.weekdays').classList.toggle('hidden', v === 'list' || v === 'todo' || v === 'goals');
   $('#todo-view').classList.toggle('hidden', v !== 'todo');
@@ -80,6 +89,7 @@ function setCalView(v) {
     const mid = addDays(state.weekStart, 3);
     state.month = new Date(mid.getFullYear(), mid.getMonth(), 1);
   }
+  if (v === 'month' || v === 'week') store.set('calMode', v); // 사이드 '달력'을 누르면 마지막에 보던 월/주로
   state.calView = v;
   store.set('calView', v);
   renderMonth();
@@ -344,19 +354,24 @@ function renderDueBar() {
   if (!bar) return;
   const today = ymd(new Date());
   let dueToday = 0, overdue = 0;
-  if (store.get('dueBarHidden', '') !== today && (state.calView === 'month' || state.calView === 'week')) {
-    for (const ds of allNoteDates()) {
-      for (const t of noteIndex.get(ds)?.todos || []) {
-        if (t.done) continue;
-        const due = parseDue(t.text, parseYmd(ds));
-        if (!due) continue;
-        if (due === today) dueToday++;
-        else if (due < today) overdue++;
-      }
+  for (const ds of allNoteDates()) {
+    for (const t of noteIndex.get(ds)?.todos || []) {
+      if (t.done) continue;
+      const due = parseDue(t.text, parseYmd(ds));
+      if (!due) continue;
+      if (due === today) dueToday++;
+      else if (due < today) overdue++;
     }
   }
-  bar.classList.toggle('hidden', !(dueToday || overdue));
-  if (!(dueToday || overdue)) return;
+  // 사이드 '할 일' 개수는 알림 줄을 오늘 숨겨도 계속 보여 줌
+  const badge = $('#side-todo-badge');
+  badge.textContent = String(dueToday + overdue);
+  badge.classList.toggle('hidden', !(dueToday || overdue));
+  badge.classList.toggle('over', overdue > 0);
+  $('#side-nav [data-nav=todo]').setAttribute('aria-label', dueToday || overdue ? `할 일, 마감 ${dueToday + overdue}개` : '할 일');
+  const show = (dueToday || overdue) && store.get('dueBarHidden', '') !== today && (state.calView === 'month' || state.calView === 'week');
+  bar.classList.toggle('hidden', !show);
+  if (!show) return;
   const parts = [];
   if (dueToday) parts.push(`오늘 마감 ${dueToday}개`);
   if (overdue) parts.push(`기한 지난 것 ${overdue}개`);

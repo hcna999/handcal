@@ -52,6 +52,10 @@ function bind() {
   // 달력: 날짜 탭 → 하루 화면, 좌우 스와이프 → 달 이동
   $('#view-seg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setCalView(b.dataset.view); });
   $('#bottom-tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setCalView(b.dataset.view); });
+  $('#side-nav').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b) setCalView(b.dataset.nav === 'cal' ? (state.calView === 'month' || state.calView === 'week' ? state.calView : store.get('calMode', 'month')) : b.dataset.nav);
+  });
   // ＋: 누르면 오늘 메모, 길게 누르면 종류 선택
   const fab = $('#fab');
   let fabLong = false;

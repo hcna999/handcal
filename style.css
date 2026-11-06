@@ -428,7 +428,8 @@ canvas { display: block; touch-action: none; }
 .text-mode .toolbar, .text-mode #ocr-panel { display: none; }
 
 /* ---------- 보기 전환 (월 / 주 / 메모) */
-.view-seg { margin-left: 6px; }
+.view-seg { margin-right: 4px; }
+body.in-day #view-seg { display: none; }
 .view-seg button { min-height: 2rem; padding: 2px 12px; }
 
 /* ---------- 주간 보기 */
@@ -582,7 +583,7 @@ canvas { display: block; touch-action: none; }
 
 /* 휴대폰 아래 탭 바 */
 .bottom-tabs { display: none; }
-@media (max-width: 599px) {
+@media (max-width: 899px) {
   #view-seg { display: none; }
   .bottom-tabs {
     display: flex;
@@ -672,7 +673,7 @@ body.in-day .fab { display: none; }
   .chip.span { pointer-events: none; }
 }
 /* 휴대폰: ＋를 아래 탭 바 위로 (기본 .fab 규칙보다 뒤에 있어야 함) */
-@media (max-width: 599px) { .fab { bottom: calc(env(safe-area-inset-bottom) + 4.6rem); } }
+@media (max-width: 899px) { .fab { bottom: calc(env(safe-area-inset-bottom) + 4.6rem); } }
 /* 탭 줄 오른쪽 묶음: [할 일][서식][필기로] */
 .page-tab.todo-insert ~ .kind-toggle { margin-left: 0; }
 
@@ -893,3 +894,23 @@ body.in-day .side-backdrop { display: none !important; }
   .goal-row-open, .goal-bar-open, .goal-toggle, .goal-spin, .goal-bar-all, .goal-del, .goal-title { min-height: 2.5rem; }
   .goal-item input[type=checkbox] { width: 1.4rem; height: 1.4rem; }
 }
+/* ---------- 왼쪽 메뉴: 달력·할 일·메모·목표. 닫으면 넓은 화면은 아이콘만 남는 좁은 줄 */
+.side-nav { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.side-nav button { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; border-radius: 8px; padding: 7px 9px; min-height: 2.3rem; font-size: 0.93rem; color: var(--muted-strong); text-align: left; }
+.side-nav button:hover { background: var(--hover); }
+.side-nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.side-nav .ic { width: 1.25rem; height: 1.25rem; flex-shrink: 0; }
+.side-nav-label { flex: 1; min-width: 0; white-space: nowrap; }
+.side-badge { flex-shrink: 0; min-width: 1.25rem; padding: 0 5px; border-radius: 999px; background: var(--line); color: var(--muted-strong); font-size: 0.72rem; font-weight: 700; line-height: 1.25rem; text-align: center; }
+.side-badge.over { background: var(--sun); color: #fff; }
+.cal-side.non-cal .cal-filter, .cal-side.non-cal .cal-hint { display: none; }
+@media (max-width: 899px) { .side-nav { display: none; } }
+@media (min-width: 900px) {
+  .cal-side { display: flex; }
+  body:not(.side-on) .cal-side { width: 3.2rem; padding: 6px 5px; overflow: visible; }
+  body:not(.side-on) .cal-side .mini-cal, body:not(.side-on) .cal-side .cal-filter, body:not(.side-on) .cal-side .cal-hint, body:not(.side-on) .side-nav-label { display: none; }
+  body:not(.side-on) .side-nav { border-bottom: 0; }
+  body:not(.side-on) .side-nav button { justify-content: center; padding: 7px 0; }
+  body:not(.side-on) .side-badge { position: absolute; top: 1px; right: 1px; min-width: 1rem; padding: 0 3px; font-size: 0.62rem; line-height: 1rem; }
+}
+@media (pointer: coarse) { .side-nav button { min-height: 2.75rem; } }

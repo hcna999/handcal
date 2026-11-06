@@ -25,24 +25,24 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=51">
-<script src="config.js?v=51"></script>
+<link rel="stylesheet" href="style.css?v=52">
+<script src="config.js?v=52"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=51"></script>
+<script src="vendor/perfect-freehand.js?v=52"></script>
 <!-- 앱 코드: js/ 폴더, 이 순서대로 (전역 이름을 함께 씀) -->
-<script src="js/core.js?v=51" defer></script>
-<script src="js/events.js?v=51" defer></script>
-<script src="js/calendar.js?v=51" defer></script>
-<script src="js/export.js?v=51" defer></script>
-<script src="js/day.js?v=51" defer></script>
-<script src="js/tabs.js?v=51" defer></script>
-<script src="js/ocr.js?v=51" defer></script>
-<script src="js/sync.js?v=51" defer></script>
-<script src="js/media.js?v=51" defer></script>
-<script src="js/stores.js?v=51" defer></script>
-<script src="js/goals.js?v=51" defer></script>
-<script src="js/ui.js?v=51" defer></script>
-<script src="js/main.js?v=51" defer></script>
+<script src="js/core.js?v=52" defer></script>
+<script src="js/events.js?v=52" defer></script>
+<script src="js/calendar.js?v=52" defer></script>
+<script src="js/export.js?v=52" defer></script>
+<script src="js/day.js?v=52" defer></script>
+<script src="js/tabs.js?v=52" defer></script>
+<script src="js/ocr.js?v=52" defer></script>
+<script src="js/sync.js?v=52" defer></script>
+<script src="js/media.js?v=52" defer></script>
+<script src="js/stores.js?v=52" defer></script>
+<script src="js/goals.js?v=52" defer></script>
+<script src="js/ui.js?v=52" defer></script>
+<script src="js/main.js?v=52" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -62,6 +62,7 @@
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 5v15M15 5v15" stroke="currentColor" stroke-width="1.6"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3.5h8.5L19 8v12.5H6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3.5V8.5h5M9 13h6M9 16.5h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </defs>
 </svg>
 
@@ -74,13 +75,6 @@
     <h1 id="month-title" title="눌러서 연·월·날짜 바로 이동"></h1>
     <button id="next-month" class="arrow" aria-label="다음">›</button>
     <button id="today-btn" class="pill">오늘</button>
-    <div id="view-seg" class="seg view-seg" role="tablist" aria-label="보기">
-      <button data-view="month" role="tab">월</button>
-      <button data-view="week" role="tab">주</button>
-      <button data-view="list" role="tab">메모</button>
-      <button data-view="todo" role="tab">할 일</button>
-      <button data-view="goals" role="tab">목표</button>
-    </div>
   </div>
   <div id="day-nav" class="nav hidden">
     <button id="back-btn" class="pill" aria-label="달력으로">‹<span class="back-lbl"> 달력</span></button>
@@ -90,6 +84,10 @@
     <button id="panel-toggle" class="pill" aria-expanded="false">할 일</button>
   </div>
   <div class="right">
+    <div id="view-seg" class="seg view-seg" role="tablist" aria-label="달력 보기">
+      <button data-view="month" role="tab">월</button>
+      <button data-view="week" role="tab">주</button>
+    </div>
     <button id="search-btn" class="icon-btn" aria-label="검색" title="검색"><svg class="ic"><use href="#i-search"/></svg></button>
     <button id="day-menu-btn" class="icon-btn hidden" aria-label="더 보기" title="내보내기 등"><svg class="ic"><use href="#i-more"/></svg></button>
     <div class="settings-wrap">
@@ -165,7 +163,13 @@
 
 <main>
   <section id="month-view">
-    <aside id="cal-side" class="cal-side" aria-label="캘린더 목록">
+    <aside id="cal-side" class="cal-side" aria-label="메뉴와 캘린더 목록">
+      <nav id="side-nav" class="side-nav" aria-label="보기">
+        <button data-nav="cal" aria-label="달력" title="달력"><svg class="ic"><use href="#i-calendar"/></svg><span class="side-nav-label">달력</span></button>
+        <button data-nav="todo" aria-label="할 일" title="할 일"><svg class="ic"><use href="#i-check"/></svg><span class="side-nav-label">할 일</span><span id="side-todo-badge" class="side-badge hidden"></span></button>
+        <button data-nav="list" aria-label="메모" title="메모"><svg class="ic"><use href="#i-note"/></svg><span class="side-nav-label">메모</span></button>
+        <button data-nav="goals" aria-label="목표" title="목표"><svg class="ic"><use href="#i-target"/></svg><span class="side-nav-label">목표</span></button>
+      </nav>
       <div class="mini-cal">
         <div class="mini-head">
           <button id="mini-prev" class="arrow" aria-label="이전 달">‹</button>
@@ -333,7 +337,7 @@
 <nav id="bottom-tabs" class="bottom-tabs" aria-label="보기">
   <button data-view="month"><svg class="ic"><use href="#i-calendar"/></svg><span>월</span></button>
   <button data-view="week"><svg class="ic"><use href="#i-week"/></svg><span>주</span></button>
-  <button data-view="list"><svg class="ic"><use href="#i-list"/></svg><span>메모</span></button>
+  <button data-view="list"><svg class="ic"><use href="#i-note"/></svg><span>메모</span></button>
   <button data-view="todo"><svg class="ic"><use href="#i-check"/></svg><span>할 일</span></button>
   <button data-view="goals"><svg class="ic"><use href="#i-target"/></svg><span>목표</span></button>
 </nav>

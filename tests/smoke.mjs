@@ -26,6 +26,17 @@ const base = `http://localhost:${server.address().port}/`;
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok }); console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`); };
 
+// 넓은 화면: 메모·할 일·목표는 사이드 메뉴, 월·주는 달력일 때만 위에 보임. 좁은 화면: 아래 탭
+const goView = async (pg, v) => {
+  const sel = `[data-view=${v}] >> visible=true`;
+  if (await pg.locator(sel).count()) return pg.click(sel);
+  if (v === 'month' || v === 'week') {
+    await pg.click('#side-nav [data-nav=cal]');
+    return pg.click(sel);
+  }
+  return pg.click(`#side-nav [data-nav=${v}]`);
+};
+
 const browser = await chromium.launch();
 const errors = [];
 try {
@@ -67,20 +78,20 @@ try {
     await p.click('#back-btn');
     await p.waitForTimeout(500);
     check(`[${vp.name}] 달력 칸 필기 표시`, !!(await p.$('.cell.today .ink')));
-    await p.click('[data-view=todo] >> visible=true');
+    await goView(p, 'todo');
     await p.waitForTimeout(600);
     check(`[${vp.name}] 할 일 모아보기`, (await p.$$eval('#todo-items .todo-text', (r) => r.map((x) => x.textContent))).includes('보고서 제출'));
-    await p.click('[data-view=week] >> visible=true');
+    await goView(p, 'week');
     await p.waitForTimeout(400);
     check(`[${vp.name}] 주간 보기`, (await p.$$('.wcell')).length === 7);
-    await p.click('[data-view=list] >> visible=true');
+    await goView(p, 'list');
     await p.waitForTimeout(600);
     check(`[${vp.name}] 메모 모아보기`, (await p.$$('.list-item')).length >= 1);
 
     // 새로고침 뒤에도 남는지
     await p.reload();
     await p.waitForSelector('#list-items');
-    await p.click('[data-view=month] >> visible=true');
+    await goView(p, 'month');
     await p.click('.cell.today');
     await p.waitForTimeout(500);
     check(`[${vp.name}] 새로고침 뒤 탭 유지`, await p.evaluate(() => pad.doc.pages.length === 2));
