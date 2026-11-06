@@ -341,14 +341,16 @@ function showOnboarding() {
 }
 
 // ---------- 설정: 글자 크기 · 화면 모드
-const UI_SCALES = [0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
+const UI_SCALES = [0.75, 0.85, 0.92, 1, 1.1, 1.2, 1.35, 1.5];
 
 // 화면 면적이 클수록 글자를 키우고, 터치 기기는 조금 크게(손가락), 마우스 기기는 조금 작게
-// 기준: 갤럭시 폴드8 펼친 화면 ≈ 16px(일정 글자 약 12.8px), 접은 화면 ≈ 14px, 아이패드 ≈ 16.4px, 노트북 ≈ 14.6px
+// 접은 화면·좁은 휴대폰(440px 이하)에서는 글자를 콤팩트하게 맞춰 한 번에 더 많은 내용을 표시함
 function autoFontPx() {
+  const w = window.innerWidth, h = window.innerHeight;
+  if (w <= 440) return 12;
   const coarse = window.matchMedia('(pointer: coarse)').matches;
-  const f = 9.5 + 0.0065 * Math.sqrt(window.innerWidth * window.innerHeight) + (coarse ? 0.5 : -1);
-  return Math.max(13, Math.min(18, f));
+  const f = 9.5 + 0.0065 * Math.sqrt(w * h) + (coarse ? 0.5 : -1);
+  return Math.max(12, Math.min(18, f));
 }
 function applyAutoFont() {
   if (document.activeElement?.matches?.('input, textarea')) return;
