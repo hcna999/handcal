@@ -806,7 +806,7 @@ async function refineStatus(req, env) {
     registered: !!rt,
     kvBound: !!env.HANDCAL_KV,
     driveOk,
-    model: env.REFINE_MODEL || 'gemini-2.5-pro',
+    model: env.REFINE_MODEL || 'gemini-2.5-flash',
     maxPages: Number(env.REFINE_MAX_PAGES_PER_RUN) || 20,
     monthlyBudgetUsd: Number(env.REFINE_MONTHLY_BUDGET_USD) || 5,
     daysBack: Number(env.REFINE_DAYS_BACK) || 14,
@@ -827,7 +827,7 @@ async function refineOne(env, { image, draft, date, events, otherText, glossary 
     draft?.todos?.length ? `[초벌 할 일]\n${draft.todos.join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
 
-  const models = [...new Set([env.REFINE_MODEL, 'gemini-2.5-pro', 'gemini-2.5-flash'].filter(Boolean))];
+  const models = [...new Set([env.REFINE_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite'].filter(Boolean))];
   let lastErr = null;
   for (const model of models) {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -848,8 +848,8 @@ async function refineOne(env, { image, draft, date, events, otherText, glossary 
     const u = data.usageMetadata || {};
     const inTok = Number(u.promptTokenCount) || 1500;
     const outTok = Number(u.candidatesTokenCount) || 400;
-    // 대략적인 비용 추정 (Pro 기준 입력 $1.25/1M, 출력 $10/1M)
-    const costUsd = Math.round(((inTok * 1.25 + outTok * 10) / 1e6) * 10000) / 10000;
+    // 대략적인 비용 추정 (Flash 기준 입력 $0.075/1M, 출력 $0.30/1M)
+    const costUsd = Math.round(((inTok * 0.075 + outTok * 0.30) / 1e6) * 10000) / 10000;
     return {
       text: String(out.text || draft?.text || ''),
       summary: String(out.summary || ''),

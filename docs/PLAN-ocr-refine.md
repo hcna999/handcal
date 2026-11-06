@@ -66,10 +66,10 @@
 
 ### 3-5. 모델·비용
 
-- 기본: **Gemini 유료 모델**(예: 2.5 Pro 급). 이미 쓰는 Gemini 키에 결제를 붙이면 된다.
-  - 유료 사용분은 구글이 학습에 쓰지 않는 조건이다(무료 사용분과 다름). 구현 시 최신 약관을 확인한다.
-- 설정은 Worker 환경 변수로 둔다: `REFINE_MODEL`, `REFINE_MAX_PAGES_PER_RUN`(기본 20), `REFINE_MONTHLY_BUDGET_USD`(기본 5), `REFINE_DAYS_BACK`(기본 14)
-- 비용 추정은 **참고치**다(가격은 바뀔 수 있음). 손글씨 한 장 = 그림 약 1~2천 토큰 + 글 수백 토큰이면 장당 1센트 안팎, 하루 10장이면 한 달 몇 달러다.
+- 기본: **Gemini Flash 모델**(`gemini-2.5-flash`). 이미 쓰는 Gemini 키에 결제(Pay-as-you-go)를 붙이면 학습 데이터에서 제외되고 보안이 보장된다.
+  - 유료 사용분은 구글이 학습에 쓰지 않는 조건이다(무료 사용분과 다름). Pro 대비 1/40 수준으로 경제적이다.
+- 설정은 Worker 환경 변수로 둔다: `REFINE_MODEL` (기본 `gemini-2.5-flash`), `REFINE_MAX_PAGES_PER_RUN`(기본 20), `REFINE_MONTHLY_BUDGET_USD`(기본 5), `REFINE_DAYS_BACK`(기본 14)
+- 비용 추정은 **참고치**다(Flash 기준 입력 $0.075/1M, 출력 $0.30/1M). 손글씨 한 장 = 약 0.0003달러(0.4원) 수준으로 하루 10장이면 한 달 약 120원 수준이다.
 - 응답의 토큰 수로 비용을 누적하고(`refine-log.json`), 월 예산을 넘으면 그달은 멈춘다.
 
 ### 3-6. 다듬기 요청(프롬프트) 초안
