@@ -204,13 +204,6 @@ try {
   // 6-4 주간 보기 지금 시각 줄 & 완료한 할 일 정리 & 개인 용어집
   await p.click('#back-btn');
   await p.waitForTimeout(300);
-  // 줄은 시간표 범위(기본 8~21시) 안에서만 그려지므로, 돌리는 시각과 상관없게 오늘 낮 12시로 고정
-  const noon = new Date();
-  noon.setHours(12, 0, 0, 0);
-  await p.clock.setFixedTime(noon);
-  await p.click('[data-view=week] >> visible=true');
-  await p.waitForTimeout(200);
-  check('주간 보기 지금 시각 줄', (await p.$$('.wtime-now')).length === 1);
 
   await p.click('#settings-btn');
   await p.waitForTimeout(200);
@@ -224,7 +217,135 @@ try {
   const glossWords = await p.evaluate(() => glossary.words());
   check('개인 용어집 추가', glossWords.includes('홍길동') && glossWords.includes('AI프로젝트'), glossWords.join(','));
   await p.click('#modal-close');
+
+  // 목표: 목표 화면에서 적기, 버킷리스트 이루기, 못 끝낸 목표 옮기기, 달력 위 한 줄, 하루 화면 사다리
+  await p.evaluate(() => $('#settings').classList.add('hidden'));
+  await p.click('[data-view=goals] >> visible=true');
+  await p.waitForTimeout(100);
+  check('목표 화면 네 단계', (await p.$$('#goals-view .goal-sec')).length === 4 && (await p.textContent('#month-title')) === '목표');
+  const addGoal = async (scope, level, text) => {
+    await p.fill(`${scope} .goal-sec[data-level=${level}] .goal-add-input`, text);
+    await p.press(`${scope} .goal-sec[data-level=${level}] .goal-add-input`, 'Enter');
+    await p.waitForTimeout(50);
+  };
+  await addGoal('#goals-view', 'bucket', '오로라 보기');
+  await addGoal('#goals-view', 'bucket', '바다 수영');
+  check('목표 추가 뒤 입력칸에 커서 유지', await p.evaluate(() => document.activeElement.matches('.goal-sec[data-level=bucket] .goal-add-input')));
+  await addGoal('#goals-view', 'year', '올해 목표A');
+  await addGoal('#goals-view', 'month', '이달 목표A');
+  await addGoal('#goals-view', 'week', '이번주 목표A');
+  await addGoal('#goals-view', 'week', '이번주 목표B');
+  check('버킷리스트 2개 저장', (await p.$$('#goals-view .goal-sec[data-level=bucket] .goal-item')).length === 2);
+
+  await p.click('#goals-view .goal-sec[data-level=bucket] .goal-item:has-text("바다 수영") input[type=checkbox]');
+  await p.waitForTimeout(50);
+  const bucketTxt = await p.textContent('#goals-view .goal-sec[data-level=bucket]');
+  const doneAt = await p.textContent('#goals-view .goal-sec[data-level=bucket] .goal-done-at');
+  check('이룬 것으로 옮겨 가고 달성일 표시', bucketTxt.includes('이룬 것 1') && /^\d{4}\.\d+\.\d+$/.test(doneAt), doneAt);
+
+  // 지난주 목표는 이번 주로 옮길 수 있음
+  const weekNow = await p.evaluate(() => { goals.add('week', goalPeriod('week', addDays(new Date(), -7)), '지난주 남은 일'); goalsChanged(); return goalPeriod('week', new Date()); });
+  await p.click('#goals-view .goal-item:has-text("지난주 남은 일") .goal-move');
+  await p.waitForTimeout(50);
+  const movedPeriod = await p.evaluate(() => goals.live().map(([, g]) => g).find((g) => g.title === '지난주 남은 일').period);
+  check('지난주 목표를 이번 주로 옮기기', movedPeriod === weekNow, movedPeriod);
+
+  // 글 고치기, 지우고 되돌리기
+  await p.click('#goals-view .goal-title:has-text("이번주 목표B")');
+  await p.fill('#goals-view .goal-edit', '이번주 목표B2');
+  await p.press('#goals-view .goal-edit', 'Enter');
+  await p.waitForTimeout(50);
+  check('목표 글 고치기', (await p.textContent('#goals-view .goal-sec[data-level=week]')).includes('이번주 목표B2'));
+  await p.click('#goals-view .goal-item:has-text("이번주 목표B2") .goal-del');
+  await p.waitForTimeout(50);
+  const afterDel = await p.textContent('#goals-view .goal-sec[data-level=week]');
+  await p.click('#toast-action');
+  await p.waitForTimeout(50);
+  check('목표 지우고 되돌리기', !afterDel.includes('이번주 목표B2') && (await p.textContent('#goals-view .goal-sec[data-level=week]')).includes('이번주 목표B2'));
+
+  // 달력·주간 위 한 줄
+  await p.click('[data-view=month] >> visible=true');
+  await p.waitForTimeout(100);
+  const monthBar = await p.textContent('#goal-bar');
+  check('달력 위 월간 목표', monthBar.includes('이달 목표A'), monthBar);
+  await p.click('[data-view=week] >> visible=true');
+  await p.waitForTimeout(100);
+  const weekBar = await p.textContent('#goal-bar');
+  check('주간 위 주간 목표', weekBar.includes('이번주 목표A') && weekBar.includes('외 2'), weekBar);
+  await p.click('[data-view=month] >> visible=true');
+  await p.waitForTimeout(100);
+
+  // 하루 화면: 왼쪽 패널에 네 단계, 패널을 닫으면 위쪽 한 줄
+  const todayYmd = await p.evaluate(() => ymd(new Date()));
+  await p.evaluate((d) => openDay(d), todayYmd);
+  await p.waitForTimeout(300);
+  await p.evaluate(() => setPanel(true));
+  const panelTxt = await p.textContent('#goal-panel');
+  check('할 일 패널 위 사다리 네 단계', (await p.$$('#goal-panel .goal-row')).length === 4 && panelTxt.includes('오로라 보기') && panelTxt.includes('올해 목표A') && panelTxt.includes('이달 목표A') && panelTxt.includes('이번주 목표A'), panelTxt);
+  check('패널이 열리면 위쪽 줄은 숨김', await p.evaluate(() => $('#goal-line').classList.contains('hidden')));
+  await p.evaluate(() => setPanel(false));
+  const lineTxt = await p.textContent('#goal-line');
+  check('패널을 닫으면 위쪽 한 줄', (await p.isVisible('#goal-line')) && lineTxt.includes('이번주 목표A') && (await p.$$('#goal-line .goal-row')).length === 1, lineTxt);
+  await p.click('#goal-line .goal-toggle');
+  check('위쪽 줄 펼치면 네 단계', (await p.$$('#goal-line .goal-row')).length === 4);
+  await p.click('#goal-line .goal-row[data-level=month] .goal-row-open');
+  await p.waitForTimeout(50);
+  await addGoal('#modal-body', 'month', '창에서 쓴 월 목표');
+  check('하루 화면을 떠나지 않고 창에서 목표 추가', (await p.textContent('#goal-line')).includes('외 1') && await p.evaluate(() => state.view === 'day'));
+  await p.click('#modal-body .goal-item:has-text("창에서 쓴 월 목표") .goal-del');
+  await p.waitForTimeout(50);
+  await p.click('#toast-action', { timeout: 3000 });
+  await p.waitForTimeout(50);
+  check('창 안에서 지워도 되돌리기를 누를 수 있음', (await p.textContent('#modal-body')).includes('창에서 쓴 월 목표'));
+  await p.click('#modal-close');
+
+  // 다음 주 날짜를 열면 그 주 목표가 보임
+  await p.evaluate(() => openDay(ymd(addDays(new Date(), 7))));
+  await p.waitForTimeout(300);
+  const nextWeekRow = await p.textContent('#goal-line .goal-row[data-level=week]');
+  check('열어 둔 날짜 기준 목표', nextWeekRow.includes('다음 주') && !nextWeekRow.includes('이번주 목표A'), nextWeekRow);
+  await p.click('#goal-line .goal-toggle');
+  await p.click('#back-btn');
+  await p.waitForTimeout(200);
+
+  check('백업에 목표 포함', await p.evaluate(async () => Object.keys((await backup.build()).goals).length >= 6));
+  await p.reload();
+  await p.waitForSelector('.cell');
+  check('새로고침 뒤 목표 유지', await p.evaluate(() => goals.list('bucket').length === 2 && goals.get(goals.list('bucket')[1].id).doneAt > 0));
   await ctx.close();
+
+  // 휴대폰: 아래 탭 5개가 화면 안에 들어오고 목표 화면이 옆으로 넘치지 않음
+  const phone = await browser.newContext({ viewport: { width: 412, height: 915 }, serviceWorkers: 'block' });
+  const q = await phone.newPage();
+  q.on('pageerror', (e) => errors.push(e.message));
+  await q.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await q.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await q.addInitScript(() => { localStorage.setItem('onboarded', 'true'); localStorage.setItem('installHintClosed', 'true'); });
+  await q.goto(base);
+  await q.waitForSelector('.cell');
+  await q.click('#bottom-tabs [data-view=goals]');
+  await q.waitForTimeout(100);
+  const fit = await q.evaluate(() => ({ tabs: document.querySelectorAll('#bottom-tabs button').length, over: document.documentElement.scrollWidth - innerWidth, inner: $('#goals-view').scrollWidth - $('#goals-view').clientWidth }));
+  check('휴대폰 탭 5개·옆으로 안 넘침', fit.tabs === 5 && fit.over <= 0 && fit.inner <= 0, JSON.stringify(fit));
+  await phone.close();
+
+  // 주간 보기 지금 시각 줄: 시간표 범위(기본 8~21시) 안에서만 그려지므로 낮 12시로 고정해서 확인.
+  // 가짜 시계는 토스트 타이머까지 흔들 수 있어 다른 시험과 섞이지 않게 따로 띄움
+  const noonCtx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+  const n = await noonCtx.newPage();
+  n.on('pageerror', (e) => errors.push(e.message));
+  await n.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await n.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await n.addInitScript(() => { localStorage.setItem('onboarded', 'true'); localStorage.setItem('installHintClosed', 'true'); });
+  const noon = new Date();
+  noon.setHours(12, 0, 0, 0);
+  await n.clock.setFixedTime(noon);
+  await n.goto(base);
+  await n.waitForSelector('.cell');
+  await n.click('[data-view=week] >> visible=true');
+  await n.waitForTimeout(200);
+  check('주간 보기 지금 시각 줄', (await n.$$('.wtime-now')).length === 1);
+  await noonCtx.close();
 } finally {
   await browser.close();
   server.close();

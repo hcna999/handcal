@@ -127,6 +127,7 @@ function insertTemplate(text) {
 
 // ---------- 범용 창
 function openModal(title, nodes) {
+  goalModalCtx = null; // 다른 창을 열면 목표 창 다시 그리기가 그 창을 덮어쓰지 않게
   $('#modal-title').textContent = title;
   $('#modal-body').replaceChildren(...nodes);
   $('#modal').classList.remove('hidden');

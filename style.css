@@ -270,7 +270,7 @@ canvas { display: block; touch-action: none; }
   border-radius: 10px;
   font-size: 0.875rem;
   max-width: calc(100vw - 32px);
-  z-index: 10;
+  z-index: 38; /* 창(.overlay) 안에서 지워도 되돌리기를 누를 수 있게 창보다 위 */
 }
 
 /* ---------- 필기 → 글자 */
@@ -856,3 +856,40 @@ body.in-day .side-backdrop { display: none !important; }
 /* 1회용 연결 코드 */
 .link-code { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .link-code-num { font-size: 1.6rem; letter-spacing: .12em; font-family: ui-monospace, Menlo, monospace; padding: 6px 12px; border: 1px dashed var(--line); border-radius: 8px; }
+
+/* ---------- 목표: 사다리·달력 위 한 줄·목표 화면 */
+.goal-ladder { display: flex; flex-direction: column; flex-shrink: 0; }
+.goal-line { background: var(--card); border-bottom: 1px solid var(--line); padding: 2px 10px; }
+#goal-panel { border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px; margin-bottom: 10px; background: var(--bg); }
+.goal-ladder-head { display: flex; align-items: center; justify-content: space-between; font-size: 0.8rem; color: var(--muted-strong); padding: 2px 2px; }
+.goal-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.goal-row-open, .goal-bar-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--text); text-align: left; padding: 5px 2px; min-height: 2rem; font-size: 0.88rem; }
+.goal-row-open.empty .goal-row-text, .goal-bar-open.empty { color: var(--muted); font-weight: 400; }
+.goal-row-label { flex-shrink: 0; min-width: 3.1rem; font-size: 0.76rem; font-weight: 700; color: var(--accent); }
+.goal-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-toggle, .goal-spin { flex-shrink: 0; border: 0; background: none; color: var(--muted); font-size: 0.8rem; padding: 2px 8px; min-height: 2rem; }
+.goal-spin { font-size: 1rem; }
+.goal-bar { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); flex-shrink: 0; }
+.goal-bar-all { flex-shrink: 0; border: 0; background: none; color: var(--muted-strong); font-size: 0.8rem; padding: 2px 6px; min-height: 2rem; white-space: nowrap; }
+.goal-bar-open .goal-row-label { min-width: 0; }
+.goals-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 10px; align-items: start; padding-bottom: 4.5rem; }
+.goal-sec { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; min-width: 0; }
+.goal-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 2.2rem; }
+.goal-sec-head h3 { margin: 0; font-size: 1rem; }
+.goal-nav { display: flex; align-items: center; gap: 2px; }
+.goal-nav-label { font-size: 0.85rem; color: var(--muted-strong); min-width: 4rem; text-align: center; }
+.goal-add { display: flex; gap: 6px; margin: 6px 0 4px; }
+.goal-add-input, .goal-edit { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--input); color: var(--text); font-size: 0.92rem; }
+.goal-item { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 4px 0; }
+.goal-item input[type=checkbox] { width: 1.15rem; height: 1.15rem; accent-color: var(--accent); flex-shrink: 0; }
+.goal-title { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); text-align: left; font-size: 0.93rem; padding: 5px 0; min-height: 2rem; word-break: break-word; }
+.goal-item.done .goal-title { text-decoration: line-through; color: var(--muted); }
+.goal-done-at { flex-shrink: 0; font-size: 0.76rem; color: var(--muted); }
+.goal-move { flex-shrink: 0; font-size: 0.76rem; white-space: nowrap; }
+.goal-del { flex-shrink: 0; border: 0; background: none; color: var(--muted); font-size: 1.1rem; padding: 0 8px; min-height: 2rem; }
+.goal-sub { margin: 10px 0 2px; font-size: 0.8rem; font-weight: 700; color: var(--muted-strong); }
+.goal-empty { margin: 6px 2px; font-size: 0.85rem; }
+@media (pointer: coarse) {
+  .goal-row-open, .goal-bar-open, .goal-toggle, .goal-spin, .goal-bar-all, .goal-del, .goal-title { min-height: 2.5rem; }
+  .goal-item input[type=checkbox] { width: 1.4rem; height: 1.4rem; }
+}

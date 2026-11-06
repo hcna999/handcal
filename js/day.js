@@ -708,6 +708,7 @@ async function openDay(ds, { push = true } = {}) {
   $('#page-scroll').scrollTop = 0;
   layoutPad();
   renderDayEvents();
+  renderDayGoals();
 
   const token = ++dayToken;
   const timer = setTimeout(() => token === dayToken && $('#loading').classList.remove('hidden'), 250);

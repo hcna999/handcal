@@ -389,6 +389,7 @@ const backup = {
       digests: store.get('digests', {}),
       templates: store.get('templates', {}),
       glossary: store.get('glossary', {}),
+      goals: store.get('goals', {}),
       prefs: store.get('prefs', {}),
     };
   },
@@ -432,7 +433,7 @@ function openBackup() {
       closeModal();
     } catch (e) { handleErr(e); btn.disabled = false; btn.textContent = '지금 백업하기'; }
   };
-  openModal('백업', [info, el('p', 'muted-text', '메모·손글씨·할 일·메모 일정·서식·용어집·설정을 한 파일로 묶어요. 사진·녹음은 드라이브에 따로 있어 묶지 않아요.'), btn]);
+  openModal('백업', [info, el('p', 'muted-text', '메모·손글씨·할 일·메모 일정·서식·용어집·목표·설정을 한 파일로 묶어요. 사진·녹음은 드라이브에 따로 있어 묶지 않아요.'), btn]);
 }
 
 // 휴지통: 지운 탭을 30일 보관 (드라이브 trash.json으로 기기끼리 공유)

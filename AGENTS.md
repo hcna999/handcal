@@ -19,7 +19,7 @@
 | 파일 | 내용 |
 |---|---|
 | `index.html` | 화면 뼈대. 스크립트/CSS 주소 끝의 `?v=NN`은 캐시를 깨는 버전 |
-| `js/*.js` | 앱 로직 12개 파일(아래 "앱 코드 파일"). 빌드 없는 **일반 스크립트**로 `index.html`에 적힌 순서대로 읽히고 전역 이름을 함께 씀 |
+| `js/*.js` | 앱 로직 13개 파일(아래 "앱 코드 파일"). 빌드 없는 **일반 스크립트**로 `index.html`에 적힌 순서대로 읽히고 전역 이름을 함께 씀 |
 | `style.css` | 스타일. 색은 `:root` 변수, 다크 모드는 `prefers-color-scheme` + `data-theme` |
 | `config.js` | 공개 설정: `GOOGLE_CLIENT_ID`, `WORKER_URL` (비밀값 아님) |
 | `sw.js` | 서비스 워커(오프라인 캐시, 네트워크 우선). `CACHE = 'handcal-vNN'` |
@@ -27,7 +27,7 @@
 | `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = []` — 서버 예약 다듬기는 꺼 둠). KV는 배포 워크플로가 Cloudflare API로 'handcal' 저장소를 찾거나 만들어 `HANDCAL_KV`로 붙임(토큰에 KV 권한 없으면 건너뜀) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
-| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집 |
+| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집, 목표 |
 | `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금, 손글씨 PNG 업로드·AI 다듬기 (가짜 드라이브) |
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
@@ -48,8 +48,9 @@
 | 8 | `sync.js` | 동기화 상태 점, 로그인 UI·`afterSignIn`, 연결 코드(1회용), 구글 Tasks(`gtasks`) |
 | 9 | `media.js` | 사진·음성 탭 |
 | 10 | `stores.js` | `syncedStore`, 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
-| 11 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
-| 12 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
+| 11 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면, 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
+| 12 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
+| 13 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
 
 - 일반 스크립트끼리는 맨 위의 `const`/`let`/`function`이 서로 보인다. 단, **파일을 읽는 순간 바로 실행되는 코드**(맨 위에서 함수를 부르거나 `const x = f()`)는 **앞 파일에 정의된 것만** 쓸 수 있다. 함수 안에서 부르는 건 상관없다.
 - 새 파일을 만들면 `index.html`의 `<script>` 목록과 `sw.js`의 `ASSETS`에 같은 순서로 넣는다. 각 파일 맨 위에 `'use strict';`.
@@ -89,6 +90,7 @@
 | `refine-news.json` | 안티그래비티 다듬기 소식 `{날짜:탭id: {date, pageId, changes, at, t}}` — 다른 기기가 열릴 때 "밤사이 N곳" 알림 | 항목별 `t` 최신 (`syncedStore`, 30일) |
 | `backup-YYYY-MM.json` | 월 자동 백업: 모든 날짜 문서 + 메모 일정·요약·서식·용어집·설정 (사진·녹음 제외). 최근 6개 유지 (`backup.run`, ⚙ 데이터 → 백업) | 덮어씀 |
 | `gtasks.json` | 할 일 ↔ 구글 Tasks 작업 연결표 `{키: {id, done, list, t}}` | 키별 `t`가 최신인 쪽 |
+| `goals.json` | 목표 `{id: {level:'bucket'|'year'|'month'|'week', period, title, order, doneAt, t}}`. `period`는 연간 `2026`, 월간 `2026-11`, 주간은 그 주 일요일 날짜 `2026-11-01`, 버킷리스트는 빈 값. `doneAt`은 달성 시각(없으면 `null`) | 항목별 `t` 최신 (`syncedStore`), 월 백업에 포함 |
 | `glossary.json` | 개인 용어집 `{단어: {src: 'user'\|'auto', t}}` — 손글씨 OCR·정밀 다듬기 프롬프트에 힌트로 전달 | 항목별 `t` 최신 (`syncedStore`) |
 | `refine-log.json` | 유료 모델 정밀 다듬기 실행 내역 및 월별 비용 `{runs:[…], monthly:{YYYY-MM:{usd,pages}}}` | 서버/앱이 최신 기록 추가 |
 | `ink/YYYY-MM-DD_탭id.png` | 손글씨 초벌 변환 때 함께 올리는 PNG(`ocr.imageId`). 서버가 주기적으로 유료 모델로 다듬을 때 사용 | 같은 탭 다시 변환 시 덮어쓰기 |
@@ -108,7 +110,8 @@
 - 캘린더 끄고 켜기: 일정마다 `calKey(ev)`(네이버 캘린더 이름 / `메모 일정` / `공휴일`)로 묶고, `prefs`의 `hiddenCals`에 든 것은 `events.on`·`holidayOn`·검색에서 뺀다. `메모 일정`을 끄면 월간 달력 칸의 메모 한 줄 요약(`.digest`)과 주간 보기의 메모 미리보기(`.wmemo-item`)도 함께 숨긴다. 네이버 목록은 Worker `/naver/events` 응답의 `calendars`에서 온다.
 - 달력·주간 위 마감 알림 줄(`#due-bar`, `renderDueBar`): `noteIndex`의 할 일만 읽어 `parseDue`로 오늘 마감·기한 지남을 셈. `noteIndex.update` 뒤에도 다시 셈. ×는 그날만 숨김(localStorage `dueBarHidden`).
 - 휴대폰 하루 화면은 위쪽 줄을 한 줄로 두려고 검색 버튼과 '‹ 달력'의 글자(`.back-lbl`)를 숨긴다.
-- 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일]은 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
+- 목표(`js/goals.js`): 보기 전환의 `목표`(`#goals-view`, `renderGoalsView`)에서 버킷리스트와 연간·월간·주간 목표를 적고, 고치고, 달성 표시하고, 지운다. 단계끼리 연결하지 않는 독립된 목록이다. 할 일을 적을 때 보도록 할 일 패널 위 `#goal-panel`과 하루 화면 맨 위 `#goal-line`에 사다리(`renderDayGoals`)를 그린다. 기준은 오늘이 아니라 **열어 둔 날짜**이고, 넓은 화면에서 패널이 열려 있으면 `#goal-line`은 숨긴다. 줄을 누르면 하루 화면을 떠나지 않고 목표 창(`openGoalModal`)이 열린다. 버킷리스트 줄은 못 이룬 것 가운데 날마다 하나(`bucketPick`, ↻는 기기별 `bucketSpin`)를 보여 준다. 달력·주간 위 `#goal-bar`(`renderGoalBar`)는 월·주 목표 한 줄이다. 못 끝낸 목표는 자동으로 넘기지 않고, 지금 기간을 볼 때 바로 앞 기간 것만 보여 주며 옮기기 버튼(`goals.moveTo`)으로 옮긴다.
+- 휴대폰(600px 미만): 보기 전환 [월·주·메모·할 일·목표]는 화면 아래 탭 바(`#bottom-tabs`), 오른쪽 아래 ＋(`#fab`, 길게 누르면 종류 선택).
 - 하루 화면: 탭 줄(탭을 길게 누르면 `showTabMenu`로 이름 바꾸기 `page.title`·좌우 순서 이동·삭제) → (손글씨면) 도구 줄 → 필기장. 손글씨 위에 변환 결과 한 줄 카드(`#ocr-panel`, `[AI 다듬기]`·`[초벌 비교]`·`[초벌로 되돌리기]` 포함). **손글씨 정밀 다듬기의 주 경로는 Antigravity 스케줄**이다: Argon 모델이 Chrome DevTools MCP로 앱을 열고 `window.argonRefine.collectTargets(일수, 최대개수=10)`(남은 수는 `remaining`)로 대상을 받아 그림을 직접 읽고 `applyResult(...)`로 저장한다. 자동화 창의 로그인은 `connectWithCode`(연결 코드)로 옮긴다. Worker의 유료 예약 다듬기(`/refine/*`, cron)는 꺼 두었고 앱도 토큰을 자동 등록하지 않는다(`registerRefineToken`은 수동용). 왼쪽 패널(상단 "할 일" 버튼 `#panel-toggle`)에는 일정 칸을 숨기고 **그날 할 일 목록(`#day-todo-list`)·키보드 할 일 즉시 추가(`#day-todo-form`)·패널 아래까지 꽉 차는 넓은 손글씨 할 일 패드(`#day-todo-canvas`, `todoInk` — 쓰기를 멈추면 자동 OCR 인식해 할 일로 등록)**만 표시한다.
 - 주간 보기에는 오늘 칸에 현재 시각 빨간 줄(`.wtime-now`)이 표시되고, 할 일 모아보기에서 '완료 보기'를 켜면 완료된 할 일을 한 번에 정리(`#todo-clear-done`, `clearDoneTodos`)할 수 있다.
 - 떠 있는 메뉴는 `showMenu(e, items)`, 길게 누르기는 `onLongPress`, Esc·뒤로는 `closeTopLayer()`가 위에 열린 것부터 닫는다.
@@ -165,6 +168,7 @@ node tests/smoke.mjs  # 로컬 서버를 띄우고 기본 흐름을 확인, 오�
 
 - `node tests/ux.mjs [스크린샷 폴더]`, `node tests/features.mjs`, `node tests/sync.mjs`로 화면 조작·기능·동기화도 확인한다.
 - 스크립트는 구글 연결 없이 "이 기기에만 저장" 모드로 돈다. 첫 실행 안내는 `localStorage.onboarded`로 건너뛴다.
+- 지금 시각에 따라 달라지는 것은 `page.clock.setFixedTime`으로 고정하되 **별도 컨텍스트**에서 시험한다. 같은 페이지에 쓰면 토스트 타이머가 일찍 실행되어 다른 시험이 간헐적으로 실패할 수 있다.
 - 구글·드라이브·Tasks·Worker가 얽힌 기능은 Playwright `page.route()`로 가짜 응답을 만들어 시험한다. 서비스 워커가 가로채지 않도록 `browser.newContext({ serviceWorkers: 'block' })`를 쓴다.
 
 ## 지켜야 할 것

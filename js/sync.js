@@ -128,6 +128,7 @@ async function afterSignIn() {
     trash.sync().catch(console.warn);
     templates.sync().catch(console.warn);
     glossary.sync().catch(console.warn);
+    syncGoals().catch(console.warn);
     refineNews.sync().then(showRefineNews).catch(console.warn);
     setTimeout(() => backup.run().catch((e) => console.warn('백업 실패', e)), 15000);
     noteIndex.fill().then(() => noteIndex.sync()).catch(console.warn);
@@ -251,6 +252,7 @@ async function refreshInBackground() {
     await notes.refreshIndex(20000);
     await memos.sync();
     await digests.sync();
+    syncGoals().catch(console.warn);
     events.clear();
     rerender();
     if (notes.pending.size) notes.flush();

@@ -243,6 +243,7 @@ function setPanel(visible) {
   body.classList.toggle('panel-toggled', toggled);
   if (!isNarrow()) { store.set('panelHidden2', !visible); layoutPad(); }
   syncPanelButton();
+  renderDayGoals();
 }
 function panelVisible() {
   const toggled = $('.day-body').classList.contains('panel-toggled');

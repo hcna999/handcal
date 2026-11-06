@@ -25,23 +25,24 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(13, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=50">
-<script src="config.js?v=50"></script>
+<link rel="stylesheet" href="style.css?v=51">
+<script src="config.js?v=51"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=50"></script>
+<script src="vendor/perfect-freehand.js?v=51"></script>
 <!-- 앱 코드: js/ 폴더, 이 순서대로 (전역 이름을 함께 씀) -->
-<script src="js/core.js?v=50" defer></script>
-<script src="js/events.js?v=50" defer></script>
-<script src="js/calendar.js?v=50" defer></script>
-<script src="js/export.js?v=50" defer></script>
-<script src="js/day.js?v=50" defer></script>
-<script src="js/tabs.js?v=50" defer></script>
-<script src="js/ocr.js?v=50" defer></script>
-<script src="js/sync.js?v=50" defer></script>
-<script src="js/media.js?v=50" defer></script>
-<script src="js/stores.js?v=50" defer></script>
-<script src="js/ui.js?v=50" defer></script>
-<script src="js/main.js?v=50" defer></script>
+<script src="js/core.js?v=51" defer></script>
+<script src="js/events.js?v=51" defer></script>
+<script src="js/calendar.js?v=51" defer></script>
+<script src="js/export.js?v=51" defer></script>
+<script src="js/day.js?v=51" defer></script>
+<script src="js/tabs.js?v=51" defer></script>
+<script src="js/ocr.js?v=51" defer></script>
+<script src="js/sync.js?v=51" defer></script>
+<script src="js/media.js?v=51" defer></script>
+<script src="js/stores.js?v=51" defer></script>
+<script src="js/goals.js?v=51" defer></script>
+<script src="js/ui.js?v=51" defer></script>
+<script src="js/main.js?v=51" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -60,6 +61,7 @@
     <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 5v15M15 5v15" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="1" fill="currentColor"/></symbol>
   </defs>
 </svg>
 
@@ -77,6 +79,7 @@
       <button data-view="week" role="tab">주</button>
       <button data-view="list" role="tab">메모</button>
       <button data-view="todo" role="tab">할 일</button>
+      <button data-view="goals" role="tab">목표</button>
     </div>
   </div>
   <div id="day-nav" class="nav hidden">
@@ -180,6 +183,7 @@
       <button id="due-open" class="due-open"></button>
       <button id="due-close" class="due-close" aria-label="오늘은 그만 보기" title="오늘은 그만 보기">×</button>
     </div>
+    <div id="goal-bar" class="goal-bar hidden"></div>
     <div class="weekdays">
       <div class="sun">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div class="sat">토</div>
     </div>
@@ -189,6 +193,9 @@
       <input id="list-search" type="search" placeholder="메모 검색" aria-label="메모 검색">
       <div id="list-items"></div>
       <button id="list-more" class="pill hidden">더 보기</button>
+    </div>
+    <div id="goals-view" class="list-view hidden">
+      <div id="goals-body" class="goals-body"></div>
     </div>
     <div id="todo-view" class="list-view hidden">
       <div class="todo-bar">
@@ -208,6 +215,7 @@
   </section>
 
   <section id="day-view" class="hidden">
+    <div id="goal-line" class="goal-ladder goal-line hidden" aria-label="목표"></div>
     <div id="page-tabs" class="page-tabs" role="tablist" aria-label="메모 탭"></div>
     <div class="toolbar">
       <div class="group">
@@ -251,6 +259,7 @@
         <button id="panel-close" class="pill">닫기</button>
       </div>
       <section id="events-panel" class="panel-sec">
+        <div id="goal-panel" class="goal-ladder" aria-label="목표"></div>
         <h2 id="day-todos-summary">할 일</h2>
         <div id="day-todo-list" class="day-todo-list"></div>
         <form id="day-todo-form" class="day-todo-form" autocomplete="off">
@@ -326,6 +335,7 @@
   <button data-view="week"><svg class="ic"><use href="#i-week"/></svg><span>주</span></button>
   <button data-view="list"><svg class="ic"><use href="#i-list"/></svg><span>메모</span></button>
   <button data-view="todo"><svg class="ic"><use href="#i-check"/></svg><span>할 일</span></button>
+  <button data-view="goals"><svg class="ic"><use href="#i-target"/></svg><span>목표</span></button>
 </nav>
 
 <!-- 떠 있는 메뉴 (날짜 길게 누르기, ＋ 길게 누르기, 서식 등) -->
