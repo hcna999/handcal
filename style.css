@@ -428,7 +428,7 @@ canvas { display: block; touch-action: none; }
 .text-mode .toolbar, .text-mode #ocr-panel { display: none; }
 
 /* ---------- 보기 전환 (월 / 주 / 메모) */
-.view-seg { margin-right: 4px; }
+.view-seg { margin-left: 6px; }
 body.in-day #view-seg { display: none; }
 .view-seg button { min-height: 2rem; padding: 2px 12px; }
 
