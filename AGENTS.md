@@ -138,17 +138,16 @@
 | `POST /auth/exchange` | 구글 인증 코드 → 토큰 (클라이언트 보안 비밀번호는 서버에만) |
 | `POST /auth/refresh` | 리프레시 토큰으로 새 액세스 토큰 |
 | `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용. 응답 `{events, calendars:[{name,color}], warnings, stats}` |
-| `POST /ocr` | 손글씨 PNG → Gemini로 글자·요약·할 일 (붐비면 다른 모델로, `geminiJson`, 개인 용어집 `glossary` 포함) |
-| `POST /transcribe` | 녹음(앱이 16kHz 모노 WAV로 바꿔 보냄, 최대 6분) → 받아쓴 글·요약·할 일 |
 | `POST /link/create` | (주인) 로그인된 기기의 연결 정보(`r` 리프레시 토큰, `a` 접근 토큰)를 KV `link:<코드>`에 5분 보관하고 8자리 1회용 코드(`ABCD-2345`, 0·O·1·I 제외) 돌려줌 |
 | `POST /link/claim` | (주인 확인 없음, 코드가 열쇠) 코드로 연결 정보를 한 번만 꺼내고 바로 지움. KV 없으면 `501 kv_missing` → 앱은 예전 긴 코드로 대신함 |
-| `POST /refine/register` | 주기적 다듬기용 구글 리프레시 토큰을 AES-GCM 암호화해 KV(또는 메모리)에 저장 |
-| `GET /refine/status` | 토큰 등록 여부·이번 달 추정 비용·마지막 실행 결과 확인 |
-| `POST /refine/run` | 단일 탭 즉시 다듬기(`image`+`draft` 전달) 또는 드라이브 일괄 스캔 다듬기(`?dry=1` 지원). `scheduled()` 크론도 같은 로직(지금은 cron 꺼 둠, 토큰 없으면 조용히 건너뜀) |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
 
+> **보안 및 프라이버시 (Gemini API 분리)**:
+> - 사용자의 개인 필기·일정 데이터 보안을 위해 **외부 Gemini API(Google Generative Language API) 연결은 완전히 제거**되었습니다 (`GEMINI_API_KEY` 불필요).
+> - 정밀 손글씨 다듬기는 로컬 Antigravity 플래시 오토메이션(`handcal-argon-ocr-refine`, `--model=flash`)에서만 동작합니다.
+
 - 구글 토큰과 `OWNER_EMAIL`로 주인만 쓸 수 있다.
-- 환경 변수는 Cloudflare 대시보드에 있다: `ALLOWED_ORIGIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OWNER_EMAIL`, `NAVER_ID`, `NAVER_APP_PASSWORD`, `GEMINI_API_KEY`, (선택) `GEMINI_MODEL`, `GEMINI_TIMEOUT_MS`, `GEMINI_PAID_API_KEY`, `GEMINI_REFINE_MODEL`, `REFINE_MONTHLY_BUDGET_USD`, `REFINE_MAX_PAGES_PER_RUN`, `TOKEN_ENC_KEY`, `HANDCAL_KV`, `NAVER_CALDAV_URL`, `TIMEZONE`, `CALENDAR_COLORS`.
+- 환경 변수는 Cloudflare 대시보드에 있다: `ALLOWED_ORIGIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OWNER_EMAIL`, `NAVER_ID`, `NAVER_APP_PASSWORD`, `HANDCAL_KV`, `NAVER_CALDAV_URL`, `TIMEZONE`, `CALENDAR_COLORS`.
 
 ## 배포
 
