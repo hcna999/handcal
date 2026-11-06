@@ -56,7 +56,6 @@ export default {
     }
   },
   scheduled(event, env, ctx) {},
-  },
 };
 
 function json(data, status, headers) {

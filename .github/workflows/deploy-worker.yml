@@ -31,6 +31,19 @@ jobs:
           else
             echo "::warning title=KV 없음::Cloudflare 토큰에 Workers KV 권한이 없어 KV 없이 배포해요. 1회용 연결 코드는 꺼져요."
           fi
+      # 외부 Gemini API 키 및 모델 환경변수를 Cloudflare Worker 비밀값에서 자동 삭제
+      - name: Gemini API 비밀값 삭제 (프라이버시 완전 분리)
+        continue-on-error: true
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for s in GEMINI_API_KEY GEMINI_MODEL REFINE_MODEL; do
+            res=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/scripts/handcal/secrets/$s" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json")
+            echo "Deleted $s from Cloudflare: $res"
+          done
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
