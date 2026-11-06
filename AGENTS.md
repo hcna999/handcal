@@ -152,7 +152,10 @@
 
 ## 배포
 
+- **Claude + Gemini 협업 원칙**: 기능 추가 및 수정 시 반드시 Claude CLI(`claude.cmd -p`)로부터 아키텍처/UX 계획을 먼저 받고 Gemini가 구현 및 테스트를 담당한다.
 - `main`에 푸시하면 앱 화면은 **GitHub Pages가 자동 배포**한다(1~2분).
+  - 작업 완료 시 **반드시 `git push origin main`까지 실행**해야 사용자의 아이패드·폴드·PC 브라우저에 반영된다 (로컬 commit에 머무르지 말 것).
+  - 푸시 후 `https://hcna999.github.io/handcal/sw.js`를 확인하여 새 버전이 배포되었는지 검증한다.
 - 같은 푸시에서 GitHub Actions `Check`(`.github/workflows/check.yml`)가 `tests/smoke.mjs`를 돌린다. 실패하면 바로 고친다.
 - `worker/` 아래가 바뀌면 **GitHub Actions가 Cloudflare에 자동 배포**한다. 저장소 비밀값 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`가 필요하다.
 - 앱 파일(js/css/html)을 바꾸면 **반드시 두 곳의 버전을 함께 올린다.** 안 올리면 사용자 기기에 예전 파일이 남는다.
