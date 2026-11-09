@@ -3,7 +3,7 @@
 'use strict';
 
 const CFG = window.APP_CONFIG || {};
-const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks';
+const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar.events';
 const FOLDER_NAME = '필기캘린더';
 const PAGE_W = 1000;
 const PAGE_H = 1414; // A4 비율

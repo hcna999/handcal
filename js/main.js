@@ -30,7 +30,7 @@ function bind() {
   const toggleSettings = (open) => {
     panel.classList.toggle('hidden', !open);
     sbtn.setAttribute('aria-expanded', String(open));
-    if (open) { renderTasksStatus(); renderLinkStatus(); renderStorageInfo(); }
+    if (open) { renderTasksStatus(); if (typeof renderGcalStatus === 'function') renderGcalStatus(); renderLinkStatus(); renderStorageInfo(); }
   };
   sbtn.onclick = (e) => { e.stopPropagation(); toggleSettings(panel.classList.contains('hidden')); };
   panel.addEventListener('click', (e) => e.stopPropagation());
@@ -292,7 +292,23 @@ function bindPad() {
     if (b.dataset.on === '1') gtasks.run(true);
   });
   $('#gtasks-reauth').onclick = () => connect('').then(() => gtasks.run(true)).catch(handleErr);
-  $('#settings-btn').addEventListener('click', renderTasksStatus);
+  // 구글 캘린더 브릿지 설정
+  if ($('#gcal-seg')) {
+    $('#gcal-seg').addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      store.set('gcalOn', b.dataset.on === '1');
+      if (typeof renderGcalStatus === 'function') renderGcalStatus();
+      if (typeof gcal !== 'undefined' && gcal.on()) gcal.syncAll().catch(handleErr);
+    });
+  }
+  if ($('#gcal-reauth')) {
+    $('#gcal-reauth').onclick = () => connect('').then(() => { if (typeof gcal !== 'undefined') gcal.syncAll(); }).catch(handleErr);
+  }
+  $('#settings-btn').addEventListener('click', () => {
+    renderTasksStatus();
+    if (typeof renderGcalStatus === 'function') renderGcalStatus();
+  });
   $('#due-open').onclick = () => { todoState.sort = 'due'; store.set('todoSort', 'due'); setCalView('todo'); };
   $('#due-close').onclick = () => { store.set('dueBarHidden', ymd(new Date())); renderDueBar(); };
   $('#side-btn').onclick = () => setSide(!document.body.classList.contains('side-on'));

@@ -157,3 +157,12 @@ AGENTS.md와 docs/PLAN-improvements.md를 읽고 0단계(0-1 ~ 0-6)만 구현해
 - [x] **12-2 안전한 피드 토큰 관리 (S)**: 구글 계정 인증 하에 UUID v4 피드 토큰 발급/조회/재발급(`POST/GET /feed/token`) 지원, 재발급 시 구 토큰 즉시 무효화 (`worker.js`, v57)
 - [x] **12-3 설정창 외부 구독 주소 발급 UI (S)**: 설정 ⚙ > 계정·동기화에 [구독 주소] 버튼 추가, 모달에서 전체/메모/할 일 피드 URL 원클릭 복사 제공 (`index.html`, `js/sync.js`, `style.css`, v57)
 - [x] **12-4 iCal 피드 및 모달 자동화 테스트 보강 (S)**: `tests/worker-feed.mjs` (16개 iCal 단위 테스트) 및 `tests/features.mjs` (구독 모달 e2e 테스트) 추가, 전체 135개 테스트 전수 통과 (v57)
+
+---
+
+## 13단계: 구글 캘린더 브릿지 (네이버 캘린더 연동 보조) (완료)
+
+- [x] **13-1 Google Calendar API 스코프 추가 (S)**: `js/core.js`의 `SCOPES`에 `https://www.googleapis.com/auth/calendar.events` 추가 (기존 `drive.file`, `tasks` 스코프 100% 보존, v58)
+- [x] **13-2 HandCalendar 보조 캘린더 브릿지 구현 (M)**: `js/gcal.js` 신설. 'HandCalendar' 보조 캘린더 자동 생성/탐색, 메모 일정 단방향 upsert/remove 동기화, `gcal.json` 드라이브 매핑 공유 (기존 Google Tasks 연동 완전 분리 및 무결성 보존, v58)
+- [x] **13-3 설정 UI 연동 및 권한/API 오류 안내 (S)**: 설정 ⚙ 세부 설정에 구글 캘린더 켜기/끄기 토글, 상태 안내 라벨, 403 권한 부족 시 [구글 다시 연결] 버튼 표출 (`index.html`, `js/main.js`, `js/gcal.js`, v58)
+- [x] **13-4 단위/통합 자동 테스트 전수 검증 (S)**: `tests/gcal.mjs` 35개 테스트 신설 및 `worker-feed.mjs`, `smoke.mjs`, `features.mjs`, `sync.mjs`(Tasks 연동 포함), `ux.mjs` 총 170개 테스트 100% 통과 (v58)

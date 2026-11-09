@@ -124,6 +124,7 @@ async function afterSignIn() {
   try {
     await notes.syncIndex();
     await memos.sync();
+    if (typeof gcal !== 'undefined') gcal.syncAll().catch(console.warn);
     await digests.sync();
     trash.sync().catch(console.warn);
     templates.sync().catch(console.warn);
@@ -339,6 +340,7 @@ async function refreshInBackground() {
   try {
     await notes.refreshIndex(20000);
     await memos.sync();
+    if (typeof gcal !== 'undefined') gcal.syncAll().catch(console.warn);
     await digests.sync();
     syncGoals().catch(console.warn);
     events.clear();

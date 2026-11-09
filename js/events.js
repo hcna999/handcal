@@ -20,14 +20,17 @@ const memos = {
     list.push({ id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: ev.title, allDay: ev.allDay, start: ev.start.toISOString(), end: ev.end.toISOString(), updated: Date.now() });
     this.save(list);
     this.sync().catch(handleErr);
+    if (typeof gcal !== 'undefined') gcal.schedule();
   },
   update(id, ev) {
     this.save(this.all().map((x) => (x.id === id ? { ...x, title: ev.title, allDay: ev.allDay, start: ev.start.toISOString(), end: ev.end.toISOString(), updated: Date.now() } : x)));
     this.sync().catch(handleErr);
+    if (typeof gcal !== 'undefined') gcal.schedule();
   },
   remove(id) {
     this.save(this.all().map((x) => (x.id === id ? { id, deleted: true, updated: Date.now() } : x)));
     this.sync().catch(handleErr);
+    if (typeof gcal !== 'undefined') gcal.schedule();
   },
   sync() {
     if (!auth.connected()) return Promise.resolve();

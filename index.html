@@ -30,24 +30,25 @@
     document.documentElement.style.setProperty('--fs-base', Math.max(12, Math.min(18, f)).toFixed(2) + 'px');
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=57">
-<script src="config.js?v=57"></script>
+<link rel="stylesheet" href="style.css?v=58">
+<script src="config.js?v=58"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="vendor/perfect-freehand.js?v=57"></script>
+<script src="vendor/perfect-freehand.js?v=58"></script>
 <!-- 앱 코드: js/ 폴더, 이 순서대로 (전역 이름을 함께씀) -->
-<script src="js/core.js?v=57" defer></script>
-<script src="js/events.js?v=57" defer></script>
-<script src="js/calendar.js?v=57" defer></script>
-<script src="js/export.js?v=57" defer></script>
-<script src="js/day.js?v=57" defer></script>
-<script src="js/tabs.js?v=57" defer></script>
-<script src="js/ocr.js?v=57" defer></script>
-<script src="js/sync.js?v=57" defer></script>
-<script src="js/media.js?v=57" defer></script>
-<script src="js/stores.js?v=57" defer></script>
-<script src="js/goals.js?v=57" defer></script>
-<script src="js/ui.js?v=57" defer></script>
-<script src="js/main.js?v=57" defer></script>
+<script src="js/core.js?v=58" defer></script>
+<script src="js/events.js?v=58" defer></script>
+<script src="js/calendar.js?v=58" defer></script>
+<script src="js/export.js?v=58" defer></script>
+<script src="js/day.js?v=58" defer></script>
+<script src="js/tabs.js?v=58" defer></script>
+<script src="js/ocr.js?v=58" defer></script>
+<script src="js/sync.js?v=58" defer></script>
+<script src="js/gcal.js?v=58" defer></script>
+<script src="js/media.js?v=58" defer></script>
+<script src="js/stores.js?v=58" defer></script>
+<script src="js/goals.js?v=58" defer></script>
+<script src="js/ui.js?v=58" defer></script>
+<script src="js/main.js?v=58" defer></script>
 </head>
 <body>
 <!-- 아이콘 모음 (어느 기기 글꼴에서도 똑같이 보이게 그림으로) -->
@@ -174,6 +175,13 @@
             </div>
             <span id="gtasks-status" class="settings-label"></span>
             <button id="gtasks-reauth" class="pill primary hidden">구글 다시 연결</button>
+            <span class="settings-label">구글 캘린더 (메모 일정 브릿지)</span>
+            <div class="seg" id="gcal-seg">
+              <button data-on="1">켜기</button>
+              <button data-on="0">끄기</button>
+            </div>
+            <span id="gcal-status" class="settings-label"></span>
+            <button id="gcal-reauth" class="pill primary hidden">구글 다시 연결</button>
             <span id="link-status" class="settings-label"></span>
           </div>
         </details>

@@ -19,20 +19,22 @@
 | 파일 | 내용 |
 |---|---|
 | `index.html` | 화면 뼈대. 스크립트/CSS 주소 끝의 `?v=NN`은 캐시를 깨는 버전 |
-| `js/*.js` | 앱 로직 13개 파일(아래 "앱 코드 파일"). 빌드 없는 **일반 스크립트**로 `index.html`에 적힌 순서대로 읽히고 전역 이름을 함께 씀 |
+| `js/*.js` | 앱 로직 14개 파일(아래 "앱 코드 파일"). 빌드 없는 **일반 스크립트**로 `index.html`에 적힌 순서대로 읽히고 전역 이름을 함께 씀 |
 | `style.css` | 스타일. 색은 `:root` 변수, 다크 모드는 `prefers-color-scheme` + `data-theme` |
 | `config.js` | 공개 설정: `GOOGLE_CLIENT_ID`, `WORKER_URL` (비밀값 아님) |
 | `sw.js` | 서비스 워커(오프라인 캐시, 네트워크 우선). `CACHE = 'handcal-vNN'` |
-| `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, 손글씨 OCR(Gemini) 및 주기적 정밀 다듬기(Cron + `/refine/*`) |
+| `worker/worker.js` | Cloudflare Worker: 구글 로그인 유지, 네이버 캘린더(CalDAV) 읽기, iCal 외부 구독 피드(/feed/*), 손글씨 OCR(Gemini) 및 주기적 정밀 다듬기(Cron + `/refine/*`) |
 | `worker/wrangler.toml` | Worker 배포 설정 (`keep_vars = true`, `[triggers] crons = []` — 서버 예약 다듬기는 꺼 둠). KV는 배포 워크플로가 Cloudflare API로 'handcal' 저장소를 찾거나 만들어 `HANDCAL_KV`로 붙임(토큰에 KV 권한 없으면 건너뜀) |
 | `.github/workflows/deploy-worker.yml` | `worker/**`가 바뀌면 Cloudflare에 자동 배포 |
 | `tests/smoke.mjs` | 브라우저 기본 동작 확인 스크립트 (아래 "확인 방법") |
-| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집, 목표 |
-| `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금, 손글씨 PNG 업로드·AI 다듬기 (가짜 드라이브) |
+| `tests/features.mjs` | 기능 확인: 공휴일·음력, 기한 읽기, 검색, 내보내기, 사진 탭, 주간 시간표, 날짜 바로 이동, 일정 수정, 탭 이름, 용어집, 목표, 구독 모달 |
+| `tests/sync.mjs` | 동기화·안정성 확인: 두 기기 합치기·충돌 사본, 색인 파일, 오프라인 표시, 앱 잠금, 손글씨 PNG 업로드·AI 다듬기, 구글 Tasks 연동 중복 방지 (가짜 드라이브) |
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
+| `tests/worker-feed.mjs` | Worker iCal 피드 및 토큰 발급 단위 테스트 |
+| `tests/gcal.mjs` | Google Calendar 브릿지(`gcal.js`) 단위 및 동작 검증 테스트 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
-| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~12단계 완료) |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~13단계 완료) |
 
 ## 앱 코드 파일 (js/, 읽히는 순서)
 
@@ -46,11 +48,12 @@
 | 6 | `tabs.js` | 탭 추가·삭제·전환·타자/손글씨 바꾸기, 하루 할 일 패널 |
 | 7 | `ocr.js` | 손글씨 → 글자(자동 변환 대기열 `autoOcr`), 달력 요약(`digests`), 초벌/다듬기, 안티그래비티 도우미 `window.argonRefine` |
 | 8 | `sync.js` | 동기화 상태 점, 로그인 UI·`afterSignIn`, 연결 코드(1회용), 구글 Tasks(`gtasks`) |
-| 9 | `media.js` | 사진·음성 탭 |
-| 10 | `stores.js` | `syncedStore`, 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
-| 11 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면(통계 요약 배지), 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
-| 12 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
-| 13 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
+| 9 | `gcal.js` | 구글 캘린더 브릿지(`gcal`, HandCalendar 보조 캘린더에 메모 일정 단방향 연동) |
+| 10 | `media.js` | 사진·음성 탭 |
+| 11 | `stores.js` | `syncedStore`, 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
+| 12 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면(통계 요약 배지), 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
+| 13 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
+| 14 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
 
 - 일반 스크립트끼리는 맨 위의 `const`/`let`/`function`이 서로 보인다. 단, **파일을 읽는 순간 바로 실행되는 코드**(맨 위에서 함수를 부르거나 `const x = f()`)는 **앞 파일에 정의된 것만** 쓸 수 있다. 함수 안에서 부르는 건 상관없다.
 - 새 파일을 만들면 `index.html`의 `<script>` 목록과 `sw.js`의 `ASSETS`에 같은 순서로 넣는다. 각 파일 맨 위에 `'use strict';`.
