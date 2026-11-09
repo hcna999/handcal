@@ -455,6 +455,63 @@ try {
   const feedInputs = await fp.$$eval('.feed-input', (els) => els.map((e) => e.value));
   check('구독 URL 3종 생성 및 토큰 포함', feedInputs.length === 3 && feedInputs.every((u) => u.includes('token=feed-uuid-5678') && (u.includes('all.ics') || u.includes('memos.ics') || u.includes('tasks.ics'))), feedInputs[0]);
   await feedCtx.close();
+
+  // 가변형 셀 할 일·메모 2~3개 표현 및 기존 일정 우선 검증
+  const cellCtx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+  const cp = await cellCtx.newPage();
+  cp.on('pageerror', (e) => errors.push(e.message));
+  await cp.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:''}" }));
+  await cp.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  await cp.addInitScript(() => {
+    localStorage.setItem('onboarded', 'true');
+    localStorage.setItem('installHintClosed', 'true');
+  });
+  await cp.goto(base);
+  await cp.waitForSelector('.cell');
+
+  // 1. 특정 날짜에 여러 개의 할 일과 메모 작성
+  const testDate = await cp.evaluate(async () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 2); // 이틀 뒤
+    const ds = ymd(d);
+    const doc = {
+      v: 2,
+      pages: [{
+        id: 'p_test',
+        kind: 'text',
+        text: '☐ 장보기\n☐ 견적서 검토\n업체 미팅 진행',
+        strokes: [],
+      }],
+      updated: Date.now(),
+    };
+    await notes.put(ds, doc);
+    renderMonth();
+    return ds;
+  });
+
+  await cp.waitForTimeout(300);
+  const items = await cp.$$eval(`.cell[data-date="${testDate}"] .digest-item`, (els) => els.map((e) => e.textContent.trim()));
+  check('달력 셀에 할 일·메모 가변형 2~3개 표현', items.length >= 2 && items.some((t) => t.includes('장보기')) && items.some((t) => t.includes('견적서 검토')), JSON.stringify(items));
+  check('할 일 체크박스 표시 포함', items.some((t) => t.startsWith('☐')));
+
+  // 2. 기존 일정(메모 일정) 추가 시 일정 우선 표시 확인
+  const chipCount = await cp.evaluate((ds) => {
+    memos.add({
+      title: '현장 실사',
+      allDay: true,
+      start: new Date(ds + 'T00:00:00Z'),
+      end: new Date(ds + 'T23:59:59Z'),
+    });
+    renderMonth();
+    const cell = document.querySelector(`.cell[data-date="${ds}"]`);
+    return cell ? cell.querySelectorAll('.chip:not(.spacer)').length : 0;
+  }, testDate);
+
+  check('기존 일정 우선 표시 (칩 렌더링)', chipCount >= 1);
+  const itemsWithChip = await cp.$$eval(`.cell[data-date="${testDate}"] .digest-item`, (els) => els.map((e) => e.textContent.trim()));
+  check('일정 칩이 있어도 남은 공간에 할 일 표시 유지', itemsWithChip.length >= 1, JSON.stringify(itemsWithChip));
+
+  await cellCtx.close();
 } finally {
   await browser.close();
   server.close();

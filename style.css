@@ -296,6 +296,37 @@ canvas { display: block; touch-action: none; }
   padding-top: 1px;
 }
 .digest-todo { color: var(--accent); font-weight: 600; }
+.digest-items {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  white-space: normal;
+  text-overflow: clip;
+  border-top: 1px dashed var(--line);
+  padding-top: 1px;
+}
+.digest-item {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 1px;
+  color: var(--text);
+}
+.digest-item.done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.digest-chk {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+.digest-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ---------- 설정 (글자 크기 · 화면 모드) */
 .settings-wrap { position: relative; }
@@ -902,6 +933,7 @@ body.in-day .side-backdrop { display: none !important; }
   .num { font-size: 0.78rem; width: 1.55em; height: 1.55em; margin-bottom: 1px; }
   .chip { font-size: 0.72rem; padding: 1px 3px; margin-bottom: 2px; line-height: 1.25; }
   .digest { font-size: 0.68rem; line-height: 1.2; }
+  .digest-item { font-size: 0.68rem; line-height: 1.2; }
   .more { font-size: 0.68rem; }
   .hol { font-size: 0.68rem; }
   .lunar { font-size: 0.62rem; }

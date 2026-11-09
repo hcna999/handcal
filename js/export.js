@@ -249,6 +249,78 @@ function insertTodo() {
   ta.dispatchEvent(new Event('input'));
 }
 
+function noteItemsFor(ds, limit) {
+  const idx = typeof noteIndex !== 'undefined' ? noteIndex.get(ds) : null;
+  if (!idx) {
+    const dg = typeof digests !== 'undefined' ? digests.get(ds) : null;
+    return dg?.text ? [{ kind: 'memo', text: dg.text.slice(0, 30), done: false }] : [];
+  }
+  const todoRe = typeof TODO_RE !== 'undefined' ? TODO_RE : /^(\s*(?:[-*•]\s*)?)(\[[ xX]\]|☐|☑|□|✅)\s*(.*)$/;
+
+  // 1. 할 일 목록
+  const todoList = [];
+  for (const t of idx.todos || []) {
+    if (!t.done) todoList.push({ kind: 'todo', text: t.text.slice(0, 30), done: false });
+  }
+  for (const t of idx.todos || []) {
+    if (t.done) todoList.push({ kind: 'todo', text: t.text.slice(0, 30), done: true });
+  }
+
+  // 2. 메모 목록 (사진/음성 미디어 대표줄 우선, 그다음 일반 탭 첫 줄들)
+  const memoList = [];
+  const mediaLines = [];
+  const textLines = [];
+
+  for (const p of idx.p || []) {
+    if (!p.text) continue;
+    const lines = p.text.split('\n')
+      .map((l) => l.replace(todoRe, '').trim())
+      .filter(Boolean);
+    if (!lines.length) continue;
+    if (lines[0].startsWith('📷') || lines[0].startsWith('🎤')) {
+      mediaLines.push(lines[0]);
+    } else {
+      textLines.push(lines[0]);
+    }
+  }
+
+  for (const m of [...mediaLines, ...textLines]) {
+    memoList.push({ kind: 'memo', text: m.slice(0, 30), done: false });
+  }
+
+  // 3. 할 일과 메모를 균형 있게 결합 (둘 다 있으면 교대로 배치하여 한쪽에 쏠리지 않음)
+  const out = [];
+  let ti = 0, mi = 0;
+  while (out.length < limit && (ti < todoList.length || mi < memoList.length)) {
+    if (ti < todoList.length) out.push(todoList[ti++]);
+    if (out.length < limit && mi < memoList.length) out.push(memoList[mi++]);
+  }
+
+  // 4. 슬롯이 아직 남았으면 단일 탭 내의 추가 메모 줄들로 보충
+  if (out.length < limit) {
+    for (const p of idx.p || []) {
+      if (out.length >= limit) break;
+      if (!p.text) continue;
+      const lines = p.text.split('\n')
+        .map((l) => l.replace(todoRe, '').trim())
+        .filter(Boolean);
+      for (let i = 1; i < lines.length && out.length < limit; i++) {
+        const txt = lines[i].slice(0, 30);
+        if (!out.some((x) => x.text === txt)) {
+          out.push({ kind: 'memo', text: txt, done: false });
+        }
+      }
+    }
+  }
+
+  // 5. fallback
+  if (!out.length) {
+    const dg = typeof digests !== 'undefined' ? digests.get(ds) : null;
+    if (dg?.text) out.push({ kind: 'memo', text: dg.text.slice(0, 30), done: false });
+  }
+  return out;
+}
+
 async function renderMonthView() {
   const y = state.month.getFullYear(), m = state.month.getMonth();
   // 휴대폰처럼 좁으면 '11월'처럼 짧게 (올해가 아니면 연도 붙임)
@@ -259,10 +331,9 @@ async function renderMonthView() {
   const grid = $('#grid');
   grid.style.setProperty('--rows', weeks);
   const cellH = (grid.clientHeight || 600) / weeks;
-  const anyDigest = Array.from({ length: weeks * 7 }, (_, i) => digests.get(ymd(addDays(start, i)))).some(Boolean);
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const chipH = rem * 1.16 + 2;
-  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.2 - (anyDigest ? chipH : 0)) / chipH));
+  const maxChips = Math.max(1, Math.floor((cellH - rem * 2.2) / chipH));
   const evs = events.cached(start, end);
   const today = ymd(new Date());
   const frag = document.createDocumentFragment();
@@ -310,10 +381,10 @@ async function renderMonthView() {
     if (hol && !(evs && events.on(evs, d).some((e) => hol.split('·').some((h) => e.title.includes(h.replace(' 연휴', '')))))) {
       cell.append(el('div', 'hol', hol));
     }
+    let lastUsed = -1, hidden = 0;
     if (evs) {
       const { lanes, visible } = weekLayouts[Math.floor(i / 7)];
       const col = i % 7;
-      let lastUsed = -1;
       for (let l = 0; l < visible; l++) if (lanes[l][col]) lastUsed = l;
       for (let l = 0; l <= lastUsed; l++) {
         const it = lanes[l][col];
@@ -333,16 +404,29 @@ async function renderMonthView() {
         }
         cell.append(chip);
       }
-      let hidden = 0;
       for (let l = visible; l < lanes.length; l++) if (lanes[l][col]) hidden++;
       if (hidden) cell.append(el('div', 'more', `+${hidden}개`));
     }
-    const dg = !hiddenCals().has(MEMO_CAL) ? digests.get(ds) : null;
-    if (dg?.text) {
-      const line = el('div', 'digest', dg.text);
-      if (dg.todos) line.prepend(el('span', 'digest-todo', `☐${dg.todos} `));
-      line.title = dg.text;
-      cell.append(line);
+    if (!hiddenCals().has(MEMO_CAL)) {
+      const usedSlots = (lastUsed + 1) + (hidden ? 1 : 0);
+      const noteSlots = Math.max(0, Math.min(3, maxChips - usedSlots));
+      if (noteSlots > 0) {
+        const items = noteItemsFor(ds, noteSlots);
+        if (items.length) {
+          const wrap = el('div', 'digest digest-items');
+          for (const it of items) {
+            const div = el('div', 'digest-item' + (it.done ? ' done' : ''));
+            div.title = it.text;
+            if (it.kind === 'todo') {
+              div.append(el('span', 'digest-chk', it.done ? '☑ ' : '☐ '), el('span', 'digest-txt', it.text));
+            } else {
+              div.append(el('span', 'digest-txt', it.text));
+            }
+            wrap.append(div);
+          }
+          cell.append(wrap);
+        }
+      }
     }
     frag.append(cell);
   }

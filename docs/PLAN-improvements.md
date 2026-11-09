@@ -166,3 +166,11 @@ AGENTS.md와 docs/PLAN-improvements.md를 읽고 0단계(0-1 ~ 0-6)만 구현해
 - [x] **13-2 HandCalendar 보조 캘린더 브릿지 구현 (M)**: `js/gcal.js` 신설. 'HandCalendar' 보조 캘린더 자동 생성/탐색, 메모 일정 단방향 upsert/remove 동기화, `gcal.json` 드라이브 매핑 공유 (기존 Google Tasks 연동 완전 분리 및 무결성 보존, v58)
 - [x] **13-3 설정 UI 연동 및 권한/API 오류 안내 (S)**: 설정 ⚙ 세부 설정에 구글 캘린더 켜기/끄기 토글, 상태 안내 라벨, 403 권한 부족 시 [구글 다시 연결] 버튼 표출 (`index.html`, `js/main.js`, `js/gcal.js`, v58)
 - [x] **13-4 단위/통합 자동 테스트 전수 검증 (S)**: `tests/gcal.mjs` 35개 테스트 신설 및 `worker-feed.mjs`, `smoke.mjs`, `features.mjs`, `sync.mjs`(Tasks 연동 포함), `ux.mjs` 총 170개 테스트 100% 통과 (v58)
+
+---
+
+## 14단계: 달력 셀 가변형 할 일·메모 표시 (기존 일정 우선) (완료)
+
+- [x] **14-1 가변형 셀 아이템 렌더링 및 일정 우선 배치 (M)**: `js/export.js`의 `renderMonthView()` 개선. 캘린더 이벤트(기존 일정 칩)가 먼저 슬롯을 차지하고, 셀 높이 및 잔여 공간에 맞춰 할 일·메모를 2~3개까지 개별 라인(`.digest-item`)으로 동적 표현 (`noteItemsFor`, v59)
+- [x] **14-2 할 일 체크박스 및 미디어/메모 균형 분배 (S)**: 미완료 할 일(`☐`), 완료 할 일(`☑`), 탭별 대표 메모/사진 설명을 균형 있게 배치하여 여러 항목이 고르게 보이도록 최적화 (`js/export.js`, `style.css`, v59)
+- [x] **14-3 모바일 콤팩트 스타일 및 e2e 자동 테스트 (S)**: `@media (max-width: 599px)` 0.68rem 폰트 축소 적용, `tests/features.mjs`에 4종 검증 케이스 추가, 전체 174개 테스트 100% 통과 (v59)

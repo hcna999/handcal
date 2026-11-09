@@ -1,5 +1,5 @@
 // 앱 파일을 캐시해서 오프라인에서도 열리게 함 (네트워크 우선)
-const CACHE = 'handcal-v58';
+const CACHE = 'handcal-v59';
 const ASSETS = ['./', './index.html', './style.css', './js/core.js', './js/events.js', './js/calendar.js', './js/export.js', './js/day.js', './js/tabs.js', './js/ocr.js', './js/sync.js', './js/gcal.js', './js/media.js', './js/stores.js', './js/goals.js', './js/ui.js', './js/main.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png', './vendor/perfect-freehand.js'];
 
 self.addEventListener('install', (e) => {
