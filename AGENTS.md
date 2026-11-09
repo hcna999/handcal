@@ -32,7 +32,7 @@
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
-| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~10단계 완료) |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~11단계 완료) |
 
 ## 앱 코드 파일 (js/, 읽히는 순서)
 

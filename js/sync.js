@@ -353,6 +353,14 @@ const gtasks = {
     const ds = task.due ? task.due.slice(0, 10) : ymd(new Date());
     const open = state.view === 'day' && state.date === ds;
     const doc = open ? pad.doc : await notes.get(ds);
+    // 비충돌 탭에 같은 텍스트가 이미 있으면 메모 수정 없이 매핑만 연결
+    const existing = todosOf(doc, ds).find(
+      (t) => !doc.pages.find((p) => p.id === t.pageId)?.conflict && t.text === title,
+    );
+    if (existing) {
+      this.setEntry(this.key(ds, existing), { id: task.id, done: existing.done, list: task._list });
+      return ds;
+    }
     const page = appendTodoLine(doc, title);
     if (!page) return null;
     this.setEntry(this.key(ds, { pageId: page.id, text: title }), { id: task.id, done: false, list: task._list });
@@ -433,7 +441,8 @@ const gtasks = {
       const doc = open ? pad.doc : await notes.get(ds);
       const seen = new Set();
       let docChanged = false;
-      for (const t of todosOf(doc, ds)) {
+      // 충돌 사본 탭은 Tasks 연동 제외 (중복 작업 방지)
+      for (const t of todosOf({ pages: doc.pages.filter((p) => !p.conflict) }, ds)) {
         const k = this.key(ds, t);
         if (seen.has(k)) continue;
         seen.add(k);

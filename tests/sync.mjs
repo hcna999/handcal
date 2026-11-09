@@ -311,6 +311,71 @@ try {
     check('초벌로 되돌리기(userEdited 표시)', reverted.text === '금요일까지 견적서 보냄' && reverted.userEdited === true);
     await ctx.close();
   }
+
+  // ---- 할 일 중복 방지 (Fix 1 · Fix 2 · Fix 3) ----
+  {
+    const dup = await device(browser);
+    const p = dup.p;
+    await p.click('.cell.today');
+    await p.waitForTimeout(400);
+
+    // Fix 2: appendTodoLine — 같은 텍스트 두 번 호출 시 중복 없이 같은 탭 반환
+    const fix2 = await p.evaluate(() => {
+      const doc = { pages: [{ id: 'px', kind: 'text', text: '☐ 중복테스트', strokes: [] }] };
+      const p1 = appendTodoLine(doc, '중복테스트');
+      const p2 = appendTodoLine(doc, '중복테스트');
+      const count = (doc.pages[0].text.match(/☐ 중복테스트/g) || []).length;
+      return { p1id: p1?.id, p2id: p2?.id, count };
+    });
+    check('Fix2 appendTodoLine 중복 방지', fix2.p1id === 'px' && fix2.p2id === 'px' && fix2.count === 1, JSON.stringify(fix2));
+
+    // Fix 2: appendTodoLine — 충돌 탭을 append 대상으로 삼지 않음
+    const fix2b = await p.evaluate(() => {
+      const doc = {
+        pages: [
+          { id: 'pc', kind: 'text', text: '', strokes: [], conflict: true },
+          { id: 'pn', kind: 'text', text: '', strokes: [] },
+        ],
+      };
+      const pg = appendTodoLine(doc, '새할일');
+      return pg?.id;
+    });
+    check('Fix2 충돌 탭을 append 대상 제외', fix2b === 'pn', fix2b);
+
+    // Fix 1: _run()에서 충돌 사본 탭의 할 일은 처리 안 함 (todosOf 필터 확인)
+    const fix1 = await p.evaluate(() => {
+      const doc = {
+        pages: [
+          { id: 'p1', kind: 'text', text: '☐ 충돌할일', strokes: [] },
+          { id: 'p1-cabc', kind: 'text', text: '(다른 기기에서 고친 내용)\n☐ 충돌할일', strokes: [], conflict: true },
+        ],
+      };
+      const all = todosOf(doc, '2026-11-09');
+      const nonConflict = todosOf({ pages: doc.pages.filter((pg) => !pg.conflict) }, '2026-11-09');
+      return { all: all.length, filtered: nonConflict.length };
+    });
+    check('Fix1 충돌 탭 필터링 todosOf', fix1.all === 2 && fix1.filtered === 1, JSON.stringify(fix1));
+
+    // Fix 3: importTask — 메모에 이미 같은 텍스트 있으면 중복 추가하지 않음
+    const fix3 = await p.evaluate(async () => {
+      const ds = ymd(new Date());
+      const doc = await notes.get(ds);
+      // 메모에 직접 할 일 추가
+      const pg = appendTodoLine(doc, 'Fix3테스트');
+      if (!pg) return { error: 'no page' };
+      await notes.put(ds, cloneDoc(doc));
+      // 같은 텍스트로 importTask 호출 (Tasks에서 가져온 것처럼)
+      const fakeTask = { id: 'task-fix3', title: 'Fix3테스트', due: ds + 'T00:00:00.000Z', _list: 'L1', status: 'needsAction' };
+      await gtasks.importTask(fakeTask);
+      const doc2 = await notes.get(ds);
+      const count = (doc2.pages.find((x) => x.kind === 'text')?.text || '').split('\n')
+        .filter((l) => /Fix3테스트/.test(l)).length;
+      return { count, mapped: !!gtasks.entry(gtasks.key(ds, { pageId: pg.id, text: 'Fix3테스트' })) };
+    });
+    check('Fix3 importTask 중복 없이 매핑', fix3.count === 1 && fix3.mapped === true, JSON.stringify(fix3));
+
+    await dup.ctx.close();
+  }
 } finally {
   await browser.close();
   server.close();

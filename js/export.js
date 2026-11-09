@@ -202,13 +202,18 @@ function renderTextTodos() {
 // 할 일 화면에서 바로 추가 → 오늘 날짜의 타자 메모 끝에 '☐ 내용'
 // 그 날짜의 타자 메모 탭 끝에 '☐ 내용'을 붙임 (탭이 없으면 만듦). 붙인 탭을 돌려줌, 탭이 가득이면 null
 function appendTodoLine(doc, text) {
-  let page = doc.pages.find((p) => p.kind === 'text');
+  // 비충돌 탭에 같은 텍스트의 할 일이 이미 있으면 중복 없이 그 탭을 돌려줌
+  for (const p of doc.pages) {
+    if (p.conflict || (p.kind !== 'text' && p.kind !== 'voice')) continue;
+    if ((p.text || '').split('\n').some((l) => { const m = TODO_RE.exec(l); return m && m[3].trim() === text; })) return p;
+  }
+  let page = doc.pages.find((p) => !p.conflict && p.kind === 'text');
   if (!page) {
-    const empty = doc.pages.find((p) => !p.strokes.length && p.kind !== 'text');
+    const empty = doc.pages.find((p) => !p.conflict && !p.strokes.length && p.kind !== 'text');
     if (empty) Object.assign(empty, { kind: 'text', text: '' });
     else if (doc.pages.length < MAX_TABS) doc.pages.push(blankPage('text'));
     else return null;
-    page = doc.pages.find((p) => p.kind === 'text');
+    page = doc.pages.find((p) => !p.conflict && p.kind === 'text');
   }
   page.text = (page.text && !page.text.endsWith('\n') ? page.text + '\n' : page.text || '') + '☐ ' + text;
   return page;
