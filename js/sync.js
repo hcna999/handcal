@@ -239,6 +239,94 @@ function openTokenTransfer() {
   openModal('구글 로그인 연결 코드 (기기·브라우저 간 이전)', [box]);
 }
 
+// 외부 캘린더(네이버 등) iCal 구독 주소 발급/조회
+async function openFeedModal() {
+  const curRefresh = store.get('refresh', null);
+  if (!auth.connected() && !curRefresh) {
+    toast('구글 로그인 후 사용할 수 있어요');
+    return;
+  }
+  const base = (CFG.WORKER_URL || '').replace(/\/$/, '');
+  if (!base) {
+    toast('서버 주소 설정이 필요해요');
+    return;
+  }
+
+  const wrap = el('div', 'feed-wrap');
+  const loading = el('p', 'muted-text', '구독 정보를 확인하는 중…');
+  wrap.append(loading);
+  openModal('외부 캘린더 구독 (네이버 등)', [wrap]);
+
+  let currentToken = null;
+  try {
+    const res = await authFetch(`${base}/feed/token`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.token) currentToken = data.token;
+  } catch (e) {
+    console.warn('feedTokenGet', e);
+  }
+
+  const issueBtn = el('button', 'pill primary', currentToken ? '구독 주소 재발급 (기존 무효화)' : '구독 주소 발급');
+  const urlSection = el('div', 'feed-urls');
+
+  const renderUrls = (tok) => {
+    urlSection.replaceChildren();
+    const feeds = [
+      { label: '전체 (메모 + 할 일)', path: 'all.ics' },
+      { label: '메모 일정만', path: 'memos.ics' },
+      { label: '구글 할 일만', path: 'tasks.ics' },
+    ];
+    for (const { label, path } of feeds) {
+      const feedUrl = `${base}/feed/${path}?token=${tok}`;
+      const row = el('div', 'feed-row');
+      const lbl = el('span', 'feed-lbl', label);
+      const inp = el('input', 'feed-input');
+      inp.type = 'text';
+      inp.value = feedUrl;
+      inp.readOnly = true;
+      inp.onclick = () => inp.select();
+      const copyBtn = el('button', 'pill', '복사');
+      copyBtn.onclick = async () => {
+        try { await navigator.clipboard.writeText(feedUrl); }
+        catch { inp.select(); document.execCommand('copy'); }
+        copyBtn.textContent = '복사됨 ✓';
+        setTimeout(() => { copyBtn.textContent = '복사'; }, 2000);
+      };
+      row.append(lbl, inp, copyBtn);
+      urlSection.append(row);
+    }
+  };
+
+  if (currentToken) renderUrls(currentToken);
+
+  issueBtn.onclick = async () => {
+    issueBtn.disabled = true;
+    issueBtn.textContent = '발급 중…';
+    try {
+      const res = await authFetch(`${base}/feed/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: curRefresh }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
+      currentToken = data.token;
+      renderUrls(currentToken);
+      issueBtn.textContent = '구독 주소 재발급 (기존 무효화)';
+      toast('구독 주소를 발급했어요');
+    } catch (e) {
+      toast('발급 실패: ' + (e.message || '오류'));
+    } finally {
+      issueBtn.disabled = false;
+    }
+  };
+
+  const guide = el('p', 'feed-guide', '• 네이버 캘린더 웹 > 다른 캘린더 구독(URL로 추가)에 위 주소를 붙여넣으세요.\n• 서버에서 5분 캐시되며, 네이버 캘린더 갱신 주기에 따라 자동 반영돼요.');
+  const warn = el('p', 'feed-warn', '⚠ 주소에 개인 토큰이 포함되어 있어요. 타인에게 공유하지 마세요.');
+
+  wrap.replaceChildren(issueBtn, urlSection, guide, warn);
+}
+
 function rerender() {
   if (state.view === 'month') renderMonth();
   else renderDayEvents();

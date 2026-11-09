@@ -77,6 +77,7 @@ function bind() {
   $('#open-refine-news').onclick = () => { $('#settings').classList.add('hidden'); openRefineNews(refineNews.live().map(([k, v]) => ({ k, ...v })).sort((a, b) => b.at - a.at).slice(0, 30)); };
   $('#open-backup').onclick = () => { $('#settings').classList.add('hidden'); openBackup(); };
   if ($('#token-transfer-btn')) $('#token-transfer-btn').onclick = openTokenTransfer;
+  if ($('#open-feed')) $('#open-feed').onclick = openFeedModal;
   $('#open-onboard').onclick = () => { $('#settings').classList.add('hidden'); showOnboarding(); };
   $('#sync-now').onclick = () => { lastRefresh = 0; notes.lastSync = 0; refreshInBackground(); notes.flush(); };
   $('#ocr-head').onclick = () => { store.set('ocrOpen', !store.get('ocrOpen', false)); renderOcr(); };

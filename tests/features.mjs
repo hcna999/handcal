@@ -423,6 +423,38 @@ try {
   const menuOpened = await n.waitForSelector('#pop-menu:not(.hidden)', { timeout: 1000 }).then(() => true).catch(() => false);
   check('주간 시간표 시간 클릭 시 메뉴 열림', menuOpened);
   await noonCtx.close();
+
+  // 외부 캘린더 구독 주소 모달 테스트
+  const feedCtx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+  const fp = await feedCtx.newPage();
+  fp.on('pageerror', (e) => errors.push(e.message));
+  await fp.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:'mock-id',WORKER_URL:'https://worker.test'}" }));
+  await fp.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  let mockToken = null;
+  await fp.route('https://worker.test/feed/token', (r) => {
+    if (r.request().method() === 'POST') {
+      mockToken = 'feed-uuid-5678';
+      return r.fulfill({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: mockToken }) });
+    }
+    return r.fulfill({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: mockToken }) });
+  });
+  await fp.addInitScript(() => {
+    localStorage.setItem('onboarded', 'true');
+    localStorage.setItem('auth', JSON.stringify({ token: 'mock-auth', expires: Date.now() + 3600000 }));
+    localStorage.setItem('refresh', JSON.stringify('mock-refresh-token'));
+  });
+  await fp.goto(base);
+  await fp.waitForSelector('.cell');
+  await fp.click('#settings-btn');
+  await fp.waitForSelector('#open-feed');
+  await fp.click('#open-feed');
+  await fp.waitForSelector('.feed-wrap');
+  check('외부 구독 모달 열림', (await fp.$('.feed-wrap')) !== null);
+  await fp.click('.feed-wrap .pill.primary');
+  await fp.waitForSelector('.feed-input');
+  const feedInputs = await fp.$$eval('.feed-input', (els) => els.map((e) => e.value));
+  check('구독 URL 3종 생성 및 토큰 포함', feedInputs.length === 3 && feedInputs.every((u) => u.includes('token=feed-uuid-5678') && (u.includes('all.ics') || u.includes('memos.ics') || u.includes('tasks.ics'))), feedInputs[0]);
+  await feedCtx.close();
 } finally {
   await browser.close();
   server.close();

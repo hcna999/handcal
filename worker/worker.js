@@ -31,7 +31,19 @@ export default {
       let body;
       if (url.pathname === '/auth/exchange' && req.method === 'POST') body = await exchange(env, await req.json());
       else if (url.pathname === '/auth/refresh' && req.method === 'POST') body = await refresh(env, await req.json());
-      else if (url.pathname === '/naver/events' && req.method === 'GET') {
+      else if (url.pathname === '/feed/token' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await feedTokenCreate(env, await req.json());
+      } else if (url.pathname === '/feed/token' && req.method === 'GET') {
+        await requireOwner(req, env);
+        body = await feedTokenGet(env);
+      } else if (url.pathname === '/feed/memos.ics' && req.method === 'GET') {
+        return await serveFeed(env, url, cors, 'memos');
+      } else if (url.pathname === '/feed/tasks.ics' && req.method === 'GET') {
+        return await serveFeed(env, url, cors, 'tasks');
+      } else if (url.pathname === '/feed/all.ics' && req.method === 'GET') {
+        return await serveFeed(env, url, cors, 'all');
+      } else if (url.pathname === '/naver/events' && req.method === 'GET') {
         await requireOwner(req, env);
         body = await naverEvents(env, url.searchParams.get('start'), url.searchParams.get('end'));
       } else if (url.pathname === '/naver/test' && req.method === 'GET') {
@@ -48,7 +60,7 @@ export default {
       } else if (['/ocr', '/transcribe'].includes(url.pathname) || url.pathname.startsWith('/refine/')) {
         throw httpError(501, 'gemini_disabled', 'Gemini API 연결이 비활성화되었습니다. 외부 API 호출을 하지 않습니다.');
       } else if (url.pathname === '/') {
-        body = { ok: true, service: 'handcal', link: !!env.HANDCAL_KV, naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: false };
+        body = { ok: true, service: 'handcal', link: !!env.HANDCAL_KV, naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: false, feed: !!env.HANDCAL_KV };
       } else return json({ error: 'not_found' }, 404, cors);
       return json(body, 200, cors);
     } catch (e) {
@@ -627,4 +639,271 @@ async function linkClaim(env, body) {
 }
 
 // 테스트용으로 내보냄 (Workers 런타임에는 영향 없음)
-export const _test = { parseICS, expandEvents, occurrences, linkCreate, linkClaim };
+
+// ---------- iCal 피드 토큰 관리
+async function feedTokenCreate(env, body) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing', 'KV 저장소(HANDCAL_KV)가 연결되지 않았어요');
+  const refresh_token = String(body?.refresh_token || '');
+  if (!refresh_token) throw httpError(400, 'no_refresh_token', '리프레시 토큰이 필요해요');
+
+  const meta = await env.HANDCAL_KV.get('feed_meta', 'json');
+  if (meta?.token) {
+    await env.HANDCAL_KV.delete('feed:' + meta.token).catch(() => {});
+  }
+
+  const token = crypto.randomUUID();
+  await env.HANDCAL_KV.put('feed:' + token, JSON.stringify({ refresh_token, at: Date.now() }));
+  await env.HANDCAL_KV.put('feed_meta', JSON.stringify({ token, at: Date.now() }));
+  return { token };
+}
+
+async function feedTokenGet(env) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing', 'KV 저장소(HANDCAL_KV)가 연결되지 않았어요');
+  const meta = await env.HANDCAL_KV.get('feed_meta', 'json');
+  return { token: meta?.token || null };
+}
+
+// ---------- iCal 피드 서빙 (외부 캘린더 구독용)
+async function serveFeed(env, url, cors, type) {
+  if (!env.HANDCAL_KV) return new Response('KV 저장소 없음', { status: 501 });
+
+  const token = url.searchParams.get('token');
+  if (!token) return new Response('?token= 파라미터가 필요해요', { status: 401 });
+
+  const cacheKey = `feedcache:${token}:${type}`;
+  const cached = await env.HANDCAL_KV.get(cacheKey);
+  if (cached) return icsResponse(cached, cors);
+
+  const data = await env.HANDCAL_KV.get('feed:' + token, 'json');
+  if (!data?.refresh_token) return new Response('유효하지 않은 피드 토큰이에요', { status: 401 });
+
+  let access_token;
+  try {
+    const t = await googleToken(env, { refresh_token: data.refresh_token, grant_type: 'refresh_token' });
+    access_token = t.access_token;
+  } catch (e) {
+    return new Response('구글 토큰 갱신 실패: ' + e.message, { status: 502 });
+  }
+
+  let ics;
+  try {
+    if (type === 'memos') {
+      const events = await readEventsFromDrive(access_token);
+      ics = buildMemosIcs(events);
+    } else if (type === 'tasks') {
+      const tasks = await readTasksFromGoogle(access_token);
+      ics = buildTasksIcs(tasks);
+    } else {
+      const [events, tasks] = await Promise.all([
+        readEventsFromDrive(access_token),
+        readTasksFromGoogle(access_token),
+      ]);
+      ics = buildAllIcs(events, tasks);
+    }
+  } catch (e) {
+    return new Response('피드 생성 실패: ' + e.message, { status: 502 });
+  }
+
+  await env.HANDCAL_KV.put(cacheKey, ics, { expirationTtl: 300 }).catch(() => {});
+  return icsResponse(ics, cors);
+}
+
+function icsResponse(ics, cors) {
+  return new Response(ics, {
+    status: 200,
+    headers: {
+      ...cors,
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
+}
+
+// ---------- Google Drive에서 events.json 읽기
+async function readEventsFromDrive(access_token) {
+  const qr = await fetch(
+    "https://www.googleapis.com/drive/v3/files?q=name%3D'events.json'+and+trashed%3Dfalse&spaces=drive&fields=files(id)&orderBy=modifiedTime+desc&pageSize=1",
+    { headers: { Authorization: 'Bearer ' + access_token } }
+  );
+  if (!qr.ok) throw new Error(`Drive 검색 실패 (${qr.status})`);
+  const { files } = await qr.json().catch(() => ({ files: [] }));
+  if (!files?.length) return [];
+
+  const fr = await fetch(
+    'https://www.googleapis.com/drive/v3/files/' + files[0].id + '?alt=media',
+    { headers: { Authorization: 'Bearer ' + access_token } }
+  );
+  if (!fr.ok) throw new Error(`Drive 읽기 실패 (${fr.status})`);
+
+  const raw = await fr.json().catch(() => null);
+  if (!raw) return [];
+  const list = Array.isArray(raw?.events) ? raw.events : Array.isArray(raw) ? raw : Object.values(raw);
+  return list.filter((e) => e && !e.deleted && e.id && e.title);
+}
+
+// ---------- Google Tasks에서 미완료 할 일 읽기
+async function readTasksFromGoogle(access_token) {
+  const TASKS_BASE = 'https://tasks.googleapis.com/tasks/v1';
+  const headers = { Authorization: 'Bearer ' + access_token };
+
+  const lr = await fetch(TASKS_BASE + '/users/@me/lists?maxResults=50', { headers });
+  if (!lr.ok) return [];
+  const { items: lists } = await lr.json().catch(() => ({ items: [] }));
+  if (!lists?.length) return [];
+
+  const tasks = [];
+  await Promise.all(
+    lists.map(async (list) => {
+      const tr = await fetch(
+        `${TASKS_BASE}/lists/${list.id}/tasks?showCompleted=false&showHidden=false&maxResults=100&fields=items(id,title,due,status,notes)`,
+        { headers }
+      ).catch(() => null);
+      if (!tr?.ok) return;
+      const { items } = await tr.json().catch(() => ({ items: [] }));
+      for (const t of items || []) {
+        if (t.status === 'needsAction' && t.due && (t.title || '').trim()) {
+          tasks.push({
+            id: t.id,
+            title: t.title.trim(),
+            due: t.due.slice(0, 10),
+            list: list.title,
+          });
+        }
+      }
+    })
+  );
+  return tasks;
+}
+
+// ---------- iCal (RFC 5545) 생성 헬퍼
+function icsEscape(s) {
+  return String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n|\r/g, '\\n');
+}
+
+function icsFold(line) {
+  const enc = new TextEncoder();
+  if (enc.encode(line).length <= 75) return line;
+  const out = [];
+  let buf = '';
+  let len = 0;
+  for (const ch of line) {
+    const chLen = enc.encode(ch).length;
+    if (len + chLen > (out.length === 0 ? 75 : 74)) {
+      out.push(buf);
+      buf = ' ';
+      len = 1;
+    }
+    buf += ch;
+    len += chLen;
+  }
+  if (buf) out.push(buf);
+  return out.join('\r\n');
+}
+
+function dtStampNow() {
+  return new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+}
+
+function nextDateStr(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+function buildVevent(uid, dtstart, dtend, summary, lastmod) {
+  const lines = [
+    'BEGIN:VEVENT',
+    'UID:' + uid,
+    'DTSTAMP:' + dtStampNow(),
+    'DTSTART' + dtstart,
+    'DTEND' + dtend,
+    icsFold('SUMMARY:' + icsEscape(summary)),
+  ];
+  if (lastmod) lines.push('LAST-MODIFIED:' + lastmod);
+  lines.push('END:VEVENT');
+  return lines.join('\r\n');
+}
+
+function buildMemosIcs(events) {
+  const header = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//HandCalendar//HandCal//KO',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:필기캘린더 메모 일정',
+    'X-WR-TIMEZONE:Asia/Seoul',
+  ];
+  const vevents = events.map((ev) => {
+    const uid = icsEscape(ev.id) + '@handcal';
+    const lastmod = ev.updated ? new Date(ev.updated).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z' : null;
+
+    if (ev.allDay) {
+      const startStr = String(ev.start).slice(0, 10).replace(/-/g, '');
+      const endStr = ev.end ? String(ev.end).slice(0, 10).replace(/-/g, '') : nextDateStr(ev.start);
+      const endFinal = endStr === startStr ? nextDateStr(ev.start) : endStr;
+      return buildVevent(uid, ';VALUE=DATE:' + startStr, ';VALUE=DATE:' + endFinal, ev.title || '(제목 없음)', lastmod);
+    } else {
+      const startUtc = new Date(ev.start).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+      const endUtc = ev.end
+        ? new Date(ev.end).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z'
+        : startUtc;
+      return buildVevent(uid, ':' + startUtc, ':' + endUtc, ev.title || '(제목 없음)', lastmod);
+    }
+  });
+  return [...header, ...vevents, 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
+
+function buildTasksIcs(tasks) {
+  const header = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//HandCalendar//HandCal//KO',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:필기캘린더 할 일',
+    'X-WR-TIMEZONE:Asia/Seoul',
+  ];
+  const vevents = tasks.map((t) => {
+    const uid = icsEscape(t.id) + '@handcal-tasks';
+    const dateStr = t.due.replace(/-/g, '');
+    const nextStr = nextDateStr(t.due);
+    return buildVevent(uid, ';VALUE=DATE:' + dateStr, ';VALUE=DATE:' + nextStr, '☐ ' + (t.title || '할 일'), null);
+  });
+  return [...header, ...vevents, 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
+
+function buildAllIcs(events, tasks) {
+  const header = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//HandCalendar//HandCal//KO',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:필기캘린더 (전체)',
+    'X-WR-TIMEZONE:Asia/Seoul',
+  ];
+  const memoLines = buildMemosIcs(events).split('\r\n');
+  const memoEvents = [];
+  let inEvent = false;
+  let cur = [];
+  for (const l of memoLines) {
+    if (l === 'BEGIN:VEVENT') { inEvent = true; cur = [l]; }
+    else if (l === 'END:VEVENT') { cur.push(l); memoEvents.push(cur.join('\r\n')); inEvent = false; }
+    else if (inEvent) cur.push(l);
+  }
+
+  const taskLines = buildTasksIcs(tasks).split('\r\n');
+  const taskEvents = [];
+  inEvent = false;
+  cur = [];
+  for (const l of taskLines) {
+    if (l === 'BEGIN:VEVENT') { inEvent = true; cur = [l]; }
+    else if (l === 'END:VEVENT') { cur.push(l); taskEvents.push(cur.join('\r\n')); inEvent = false; }
+    else if (inEvent) cur.push(l);
+  }
+
+  return [...header, ...memoEvents, ...taskEvents, 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
+
+export const _test = { parseICS, expandEvents, occurrences, linkCreate, linkClaim, feedTokenCreate, feedTokenGet, buildMemosIcs, buildTasksIcs, buildAllIcs };

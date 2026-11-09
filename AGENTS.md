@@ -32,7 +32,7 @@
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
-| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~11단계 완료) |
+| `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~12단계 완료) |
 
 ## 앱 코드 파일 (js/, 읽히는 순서)
 
@@ -140,6 +140,11 @@
 | `GET /naver/events?start&end` | 네이버 캘린더 일정(CalDAV, 반복 일정 펼침), 읽기 전용. 응답 `{events, calendars:[{name,color}], warnings, stats}` |
 | `POST /link/create` | (주인) 로그인된 기기의 연결 정보(`r` 리프레시 토큰, `a` 접근 토큰)를 KV `link:<코드>`에 5분 보관하고 8자리 1회용 코드(`ABCD-2345`, 0·O·1·I 제외) 돌려줌 |
 | `POST /link/claim` | (주인 확인 없음, 코드가 열쇠) 코드로 연결 정보를 한 번만 꺼내고 바로 지움. KV 없으면 `501 kv_missing` → 앱은 예전 긴 코드로 대신함 |
+| `POST /feed/token` | (주인) iCal 피드 토큰(UUID v4) 발급. 기존 토큰 무효화 후 KV `feed:<token>`에 보관 |
+| `GET /feed/token` | (주인) 현재 발급된 iCal 피드 토큰 조회 |
+| `GET /feed/memos.ics?token=` | 메모 일정 iCal 피드 (RFC 5545, 5분 KV 캐시) |
+| `GET /feed/tasks.ics?token=` | 구글 Tasks 미완료 할 일(마감일 기준) iCal 피드 (5분 KV 캐시) |
+| `GET /feed/all.ics?token=` | 메모 일정 + 구글 할 일 통합 iCal 피드 (네이버 캘린더 등 외부 구독용) |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
 
 > **보안 및 프라이버시 (Gemini API 분리)**:
