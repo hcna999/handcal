@@ -319,6 +319,17 @@ try {
   await p.click('#back-btn');
   await p.waitForTimeout(200);
 
+  // 전체 검색에 목표가 나오고, 누르면 그 기간의 목표 창
+  await p.click('#search-btn');
+  await p.fill('#search-input', '오로라');
+  await p.waitForTimeout(500);
+  const goalHit = await p.$$eval('#search-results .search-goal', (x) => x.map((i) => i.textContent));
+  check('전체 검색에 목표 포함', goalHit.length === 1 && goalHit[0].includes('오로라 보기') && goalHit[0].includes('버킷'), goalHit.join(' | '));
+  await p.click('#search-results .search-goal');
+  await p.waitForTimeout(100);
+  check('검색한 목표를 누르면 목표 창', (await p.isVisible('#modal')) && (await p.textContent('#modal-body')).includes('오로라 보기') && !(await p.isVisible('#search-ov')));
+  await p.click('#modal-close');
+
   check('백업에 목표 포함', await p.evaluate(async () => Object.keys((await backup.build()).goals).length >= 6));
   await p.reload();
   await p.waitForSelector('.cell');
@@ -430,6 +441,9 @@ try {
   fp.on('pageerror', (e) => errors.push(e.message));
   await fp.route(/config\.js/, (r) => r.fulfill({ contentType: 'text/javascript', body: "window.APP_CONFIG={GOOGLE_CLIENT_ID:'mock-id',WORKER_URL:'https://worker.test'}" }));
   await fp.route('https://accounts.google.com/**', (r) => r.fulfill({ body: '' }));
+  // 실제 구글·서버에 닿지 않게 모두 가짜 응답 (실서버 응답 속도에 따라 로그인이 풀려 시험이 멈추던 문제 방지)
+  await fp.route(/googleapis.com/, (r) => r.fulfill({ contentType: 'application/json', body: '{"files":[],"items":[]}' }));
+  await fp.route('https://worker.test/**', (r) => r.fulfill({ contentType: 'application/json', body: '{"events":[],"calendars":[]}' }));
   let mockToken = null;
   await fp.route('https://worker.test/feed/token', (r) => {
     if (r.request().method() === 'POST') {

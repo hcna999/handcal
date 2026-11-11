@@ -125,7 +125,7 @@ function weekTimeline(day, timed, weekEvs) {
     line.onclick = (e) => {
       e.stopPropagation();
       const ds = ymd(day);
-      const sh = pad2(h), eh = pad2(Math.min(23, h + 1));
+      const sh = pad2(h);
       showMenu(e, [
         {
           label: `${h}시 메모 일정 추가`,
@@ -137,7 +137,7 @@ function weekTimeline(day, timed, weekEvs) {
               onSubmit: async (v) => {
                 if (!v.trim()) return;
                 const start = new Date(`${ds}T${sh}:00:00`);
-                const end = new Date(`${ds}T${eh}:00:00`);
+                const end = new Date(+start + 3600e3); // 23시도 한 시간짜리가 되게 (자정 넘김)
                 memos.add({ title: v.trim(), start, end, allDay: false });
                 rerender();
                 toast(`${ds} ${h}시에 일정을 추가했어요`);
@@ -571,7 +571,7 @@ const searchState = { token: 0, events: null };
 function openSearch() {
   $('#search-ov').classList.remove('hidden');
   $('#search-input').value = '';
-  $('#search-results').replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목에서 찾아요.'));
+  $('#search-results').replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목·목표에서 찾아요.'));
   setTimeout(() => $('#search-input').focus(), 30);
   // 일정은 앞뒤 6개월치를 한 번 불러둠
   if (!searchState.events) {
@@ -596,7 +596,7 @@ async function runSearch() {
   const q = $('#search-input').value.trim().toLowerCase();
   const box = $('#search-results');
   const token = ++searchState.token;
-  if (!q) { box.replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목에서 찾아요.')); return; }
+  if (!q) { box.replaceChildren(el('p', 'muted-text', '메모·손글씨·할 일·일정 제목·목표에서 찾아요.')); return; }
   const hits = [];
   const dates = allNoteDates();
   box.replaceChildren(el('p', 'muted-text', `찾는 중… (0/${dates.length})`));
@@ -621,11 +621,23 @@ async function runSearch() {
     if (ev.title.toLowerCase().includes(q)) hits.push({ ds: ymd(ev.start), type: '일정', text: (ev.allDay ? '' : hm(ev.start) + ' ') + ev.title });
   }
   if (token !== searchState.token) return;
+  // 목표(버킷리스트·연간·월간·주간): 날짜가 아니라 기간에 속하므로 맨 위에 따로 보여 주고, 누르면 그 기간의 목표 창
+  const goalHits = goals.live().map(([id, g]) => ({ id, ...g }))
+    .filter((g) => GOAL_LEVELS[g.level] && (g.title || '').toLowerCase().includes(q))
+    .sort((a, b) => (!!a.doneAt - !!b.doneAt) || GOAL_ORDER.indexOf(b.level) - GOAL_ORDER.indexOf(a.level) || String(b.period).localeCompare(String(a.period)))
+    .slice(0, 30)
+    .map((g) => {
+      const d = g.level === 'year' ? new Date(+g.period, 0, 1) : g.level === 'month' ? parseYmd(g.period + '-01') : g.level === 'week' ? parseYmd(g.period) : new Date();
+      const b = el('button', 'search-hit search-goal' + (g.doneAt ? ' done' : ''));
+      b.append(el('span', 'search-date', goalLabel(g.level, d)), el('span', 'search-type', g.level === 'bucket' ? '버킷' : '목표'), markText((g.doneAt ? '✓ ' : '') + g.title, q));
+      b.onclick = () => { $('#search-ov').classList.add('hidden'); openGoalModal(g.level, d); };
+      return b;
+    });
   const seen = new Set();
   const uniq = hits.filter((h) => { const k = h.ds + h.type + h.text; if (seen.has(k)) return false; seen.add(k); return true; })
     .sort((a, b) => b.ds.localeCompare(a.ds)).slice(0, 150);
-  if (!uniq.length) { box.replaceChildren(el('p', 'muted-text', '찾는 내용이 없어요.')); return; }
-  box.replaceChildren(el('p', 'muted-text', `${uniq.length}개 찾음`), ...uniq.map((h) => {
+  if (!uniq.length && !goalHits.length) { box.replaceChildren(el('p', 'muted-text', '찾는 내용이 없어요.')); return; }
+  box.replaceChildren(el('p', 'muted-text', `${uniq.length + goalHits.length}개 찾음`), ...goalHits, ...uniq.map((h) => {
     const d = parseYmd(h.ds);
     const b = el('button', 'search-hit');
     b.append(el('span', 'search-date', `${d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '. '}${d.getMonth() + 1}/${d.getDate()} (${WD[d.getDay()]})`), el('span', 'search-type', h.type), markText(h.text, q));

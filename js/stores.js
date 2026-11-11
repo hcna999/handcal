@@ -8,17 +8,28 @@ function syncedStore(fileName, storeKey, keepDays = 60) {
     fileId: null,
     syncing: null,
     timer: null,
-    all() { return store.get(storeKey, {}); },
+    // 달력 한 번 그릴 때 get을 수백 번 부르므로, 저장된 글이 그대로면 해석해 둔 것을 다시 씀
+    _raw: undefined,
+    _obj: null,
+    all() {
+      let raw = null;
+      try { raw = localStorage.getItem(storeKey); } catch { /* 저장소 사용 불가 */ }
+      if (raw !== this._raw || !this._obj) {
+        this._raw = raw;
+        try { this._obj = raw == null ? {} : JSON.parse(raw) || {}; } catch { this._obj = {}; }
+      }
+      return this._obj;
+    },
     live() { return Object.entries(this.all()).filter(([, v]) => !v.deleted); },
     get(k) { const v = this.all()[k]; return v && !v.deleted ? v : null; },
     put(k, v) {
-      const a = this.all();
+      const a = { ...this.all() }; // 캐시해 둔 것을 직접 고치지 않게 복사
       a[k] = { ...v, t: Date.now() };
       store.set(storeKey, a);
       this.later();
     },
     del(k) {
-      const a = this.all();
+      const a = { ...this.all() };
       if (!a[k] || a[k].deleted) return;
       a[k] = { deleted: true, t: Date.now() };
       store.set(storeKey, a);

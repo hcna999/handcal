@@ -58,6 +58,15 @@ async function run() {
   check('memos.ics 시간 일정 (UTC Z)', memoIcs.includes('DTSTART:20261116T090000Z') && memoIcs.includes('DTEND:20261116T110000Z'));
   check('memos.ics CRLF 줄바꿈', memoIcs.includes('\r\n') && !memoIcs.replace(/\r\n/g, '').includes('\n'));
 
+  // 3-1. 앱이 실제로 저장하는 형식: 한국 자정을 ISO(UTC)로 적은 종일 일정 (전날 15:00Z) → 한국 날짜 그대로
+  const realIcs = buildMemosIcs([
+    { id: 'r1', title: '실제 형식 하루', allDay: true, start: '2026-11-14T15:00:00.000Z', end: '2026-11-15T15:00:00.000Z', updated: 1 },
+    { id: 'r2', title: '실제 형식 사흘', allDay: true, start: '2026-11-19T15:00:00.000Z', end: '2026-11-22T15:00:00.000Z', updated: 1 },
+  ]);
+  check('memos.ics 종일 일정이 하루 밀리지 않음', realIcs.includes('DTSTART;VALUE=DATE:20261115') && realIcs.includes('DTEND;VALUE=DATE:20261116'), realIcs.match(/DTSTART[^\r]*/g).join(' '));
+  check('memos.ics 여러 날 종일 일정', realIcs.includes('DTSTART;VALUE=DATE:20261120') && realIcs.includes('DTEND;VALUE=DATE:20261123'));
+  check('memos.ics 시간대 지정', buildMemosIcs([{ id: 'r3', title: 'UTC', allDay: true, start: '2026-11-15T00:00:00.000Z', end: '2026-11-16T00:00:00.000Z' }], 'UTC').includes('DTSTART;VALUE=DATE:20261115'));
+
   // 4. buildTasksIcs - 마감일 있는 할 일
   const tasks = [
     { id: 't1', title: '보고서 작성 및 제출', due: '2026-11-20', list: '기본 목록' },

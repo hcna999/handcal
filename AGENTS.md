@@ -32,7 +32,7 @@
 | `tests/ux.mjs` | 화면 조작 확인: Esc, 탭 삭제·되돌리기·휴지통, 첫 실행 안내, 길게 누르기, ＋, 아래 탭 바 |
 | `tests/worker-feed.mjs` | Worker iCal 피드 및 토큰 발급 단위 테스트 |
 | `tests/gcal.mjs` | Google Calendar 브릿지(`gcal.js`) 단위 및 동작 검증 테스트 |
-| `.github/workflows/check.yml` | 푸시마다 기본 동작 확인 + AGENTS.md 최신화 경고 |
+| `.github/workflows/check.yml` | 푸시마다 시험 여섯 개(smoke·ux·features·sync·gcal·worker-feed) + AGENTS.md 최신화 경고 |
 | `docs/PLAN-ocr-refine.md` | 계획: 손글씨 변환을 유료 모델로 주기적으로 다듬기 (1~7단계 완료) |
 | `docs/PLAN-improvements.md` | 계획: 기능·UI·UX 개선 목록(0~14단계 완료) |
 
@@ -48,9 +48,9 @@
 | 6 | `tabs.js` | 탭 추가·삭제·전환·타자/손글씨 바꾸기, 하루 할 일 패널 |
 | 7 | `ocr.js` | 손글씨 → 글자(자동 변환 대기열 `autoOcr`), 달력 요약(`digests`), 초벌/다듬기, 안티그래비티 도우미 `window.argonRefine` |
 | 8 | `sync.js` | 동기화 상태 점, 로그인 UI·`afterSignIn`, 연결 코드(1회용), 구글 Tasks(`gtasks`) |
-| 9 | `gcal.js` | 구글 캘린더 브릿지(`gcal`, HandCalendar 보조 캘린더에 메모 일정 단방향 연동) |
+| 9 | `gcal.js` | 구글 캘린더 브릿지(`gcal`, HandCalendar 보조 캘린더에 메모 일정 단방향 연동). 종일 일정 날짜는 기기 현지 날짜(`localDateStr`)로 보낸다(메모 일정의 start/end는 현지 자정의 ISO라 글자를 자르면 하루 밀림). 이미 올린 뒤 안 바뀐 일정은 건너뛰고(localStorage `gcalSynced` `{memoId: updated}`), 설정에서 켜거나 다시 연결할 때만 `syncAll(true)`로 전부 다시 올린다. 연결표에만 있는 일정 정리는 `memos.sync()`가 방금 성공했을 때만 한다(다른 기기 일정 보호) |
 | 10 | `media.js` | 사진·음성 탭 |
-| 11 | `stores.js` | `syncedStore`, 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
+| 11 | `stores.js` | `syncedStore`(읽기는 `all()`이 해석해 둔 것을 다시 씀. 돌려받은 객체를 직접 고치지 말고 `put`/`del`을 쓸 것), 두 기기 탭 합치기, 색인(`noteIndex`), 앱 잠금, 캘린더 켜고 끄기·왼쪽 목록 창, 다듬기 소식, 월 백업, 휴지통, 서식 |
 | 12 | `goals.js` | 버킷리스트·연간·월간·주간 목표(`goals`), 목표 화면(통계 요약 배지), 할 일 쓸 때 보는 사다리, 달력·주간 위 한 줄, 목표 창 |
 | 13 | `ui.js` | 떠 있는 메뉴·길게 누르기, 빠른 동작, 창(모달)·용어집·기록, 처음 안내, 글자 크기·화면 모드 |
 | 14 | `main.js` | 이벤트 연결(`bind`), 시작(`init`) |
@@ -124,7 +124,7 @@
 
 - 할 일 글에서 기한을 읽는다(`parseDue`, 기준은 메모 날짜): 오늘·내일·모레, '금요일까지', '다음주 월요일', '11/7', '7일까지', '3일 뒤', '월말'. 할 일 모아보기는 기한순(지남·오늘·내일·이번 주·나중·기한 없음)·날짜순. 구글 Tasks 마감일도 이 기한(없으면 메모 날짜)이다.
 - 음력은 브라우저 내장 한국 달력(`Intl.DateTimeFormat('ko-KR-u-ca-dangi')`, `lunarOf`)으로 계산한다. 공휴일·대체공휴일은 `holidaysOf(연도)`가 규칙으로 만든다(선거일 등 임시 공휴일은 없음). 설정 '음력 표시'(끔/1일·15일/매일).
-- 전체 검색(돋보기, Ctrl+K, `/`)은 메모·변환된 손글씨·음성 글·사진 설명·할 일·일정 제목을 찾는다(`runSearch`).
+- 전체 검색(돋보기, Ctrl+K, `/`)은 메모·변환된 손글씨·음성 글·사진 설명·할 일·일정 제목·목표를 찾는다(`runSearch`). 목표는 결과 맨 위에 따로 나오고 누르면 그 기간의 목표 창(`openGoalModal`)이 열린다.
 - 내보내기(설정 또는 하루 화면 ⋯): 기간을 골라 마크다운 파일 저장 / PDF(인쇄 창) / 공유(`exportRange`).
 - 안드로이드 공유 대상: `manifest.webmanifest`의 `share_target` → `sw.js`가 `share-inbox` 캐시에 두고 `./?shared=1`로 열기 → `takeShared`가 오늘 메모(글)·사진 탭에 넣는다.
 
@@ -145,7 +145,7 @@
 | `POST /link/claim` | (주인 확인 없음, 코드가 열쇠) 코드로 연결 정보를 한 번만 꺼내고 바로 지움. KV 없으면 `501 kv_missing` → 앱은 예전 긴 코드로 대신함 |
 | `POST /feed/token` | (주인) iCal 피드 토큰(UUID v4) 발급. 기존 토큰 무효화 후 KV `feed:<token>`에 보관 |
 | `GET /feed/token` | (주인) 현재 발급된 iCal 피드 토큰 조회 |
-| `GET /feed/memos.ics?token=` | 메모 일정 iCal 피드 (RFC 5545, 5분 KV 캐시) |
+| `GET /feed/memos.ics?token=` | 메모 일정 iCal 피드 (RFC 5545, 5분 KV 캐시). 종일 일정 날짜는 `TIMEZONE`(기본 Asia/Seoul) 기준(`feedDay`) |
 | `GET /feed/tasks.ics?token=` | 구글 Tasks 미완료 할 일(마감일 기준) iCal 피드 (5분 KV 캐시) |
 | `GET /feed/all.ics?token=` | 메모 일정 + 구글 할 일 통합 iCal 피드 (네이버 캘린더 등 외부 구독용) |
 | `GET /naver/test`, `/naver/debug` | 진단용 |
@@ -163,7 +163,7 @@
 - `main`에 푸시하면 앱 화면은 **GitHub Pages가 자동 배포**한다(1~2분).
   - 작업 완료 시 **반드시 `git push origin main`까지 실행**해야 사용자의 아이패드·폴드·PC 브라우저에 반영된다 (로컬 commit에 머무르지 말 것).
   - 푸시 후 `https://hcna999.github.io/handcal/sw.js`를 확인하여 새 버전이 배포되었는지 검증한다.
-- 같은 푸시에서 GitHub Actions `Check`(`.github/workflows/check.yml`)가 `tests/smoke.mjs`를 돌린다. 실패하면 바로 고친다.
+- 같은 푸시에서 GitHub Actions `Check`(`.github/workflows/check.yml`)가 `tests/`의 시험 여섯 개를 돌린다. 실패하면 바로 고친다. 로그인한 상태를 흉내 내는 시험은 `googleapis.com`과 Worker 주소를 모두 `page.route()`로 막는다(실서버 응답 속도에 따라 결과가 달라지지 않게).
 - `worker/` 아래가 바뀌면 **GitHub Actions가 Cloudflare에 자동 배포**한다. 저장소 비밀값 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`가 필요하다.
 - 앱 파일(js/css/html)을 바꾸면 **반드시 두 곳의 버전을 함께 올린다.** 안 올리면 사용자 기기에 예전 파일이 남는다.
   - `sw.js`의 `CACHE = 'handcal-vNN'`

@@ -5,6 +5,15 @@
 const GCAL_API = 'https://www.googleapis.com/calendar/v3';
 const GCAL_CAL_NAME = 'HandCalendar';
 
+// 메모 일정의 start/end는 현지 자정을 ISO(UTC)로 적은 값이라, 글자를 그대로 자르면 한국 시간에서는 하루 전날이 됨
+function localDateStr(v) {
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (isNaN(d)) return s.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function nextDayStr(ymdStr) {
   const d = new Date(ymdStr + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + 1);
@@ -14,6 +23,7 @@ function nextDayStr(ymdStr) {
 const gcal = {
   calId: store.get('gcalCalId', null),
   map: store.get('gcalMap', {}), // memoId → gcalEventId
+  synced: store.get('gcalSynced', {}), // memoId → 마지막으로 구글에 올린 memo.updated (이 기기 기준, 안 바뀐 일정은 다시 올리지 않음)
   mapFileId: null,
   dirty: false,
   timer: null,
@@ -84,8 +94,8 @@ const gcal = {
   // ---- memo 객체 → GCal event body 변환
   _eventBody(memo) {
     if (memo.allDay) {
-      const startStr = String(memo.start).slice(0, 10);
-      let endStr = memo.end ? String(memo.end).slice(0, 10) : startStr;
+      const startStr = localDateStr(memo.start);
+      let endStr = memo.end ? localDateStr(memo.end) : startStr;
       if (endStr <= startStr) endStr = nextDayStr(startStr); // GCal 종일 일정은 end가 exclusive
       return {
         summary: memo.title || '(제목 없음)',
@@ -111,6 +121,7 @@ const gcal = {
           method: 'PUT',
           body: JSON.stringify(body),
         });
+        this.markSynced(memo);
         return;
       } catch (e) {
         if (!/HTTP 404/.test(e.message)) throw e;
@@ -123,7 +134,13 @@ const gcal = {
     });
     this.map[memo.id] = created.id;
     store.set('gcalMap', this.map);
+    this.markSynced(memo);
     this.dirty = true;
+  },
+
+  markSynced(memo) {
+    this.synced[memo.id] = memo.updated || 0;
+    store.set('gcalSynced', this.synced);
   },
 
   // ---- 메모 삭제 → GCal event 삭제
@@ -135,28 +152,38 @@ const gcal = {
       .catch((e) => { if (!/HTTP 404/.test(e.message)) throw e; });
     delete this.map[memoId];
     store.set('gcalMap', this.map);
+    if (memoId in this.synced) { delete this.synced[memoId]; store.set('gcalSynced', this.synced); }
     this.dirty = true;
   },
 
   // ---- 전체 동기화: memos 목록 기준으로 GCal과 맞춤 (단방향, memos → GCal)
-  async _syncAll() {
+  async _syncAll(force) {
     if (!this.on()) return;
     this.problem = null;
+    // 다른 기기에서 만든 일정을 '모르는 일정'으로 보고 지우지 않도록, 먼저 메모 일정을 최신으로 받음
+    let memosFresh = false;
+    try { await memos.sync(); memosFresh = true; } catch (e) { console.warn('GCal 연동: 메모 일정 동기화 실패, 정리는 건너뜀', e.message); }
     await this.syncMap(false);
 
     const all = memos.all();
     const active = all.filter((x) => !x.deleted);
     const deleted = all.filter((x) => x.deleted);
 
-    for (const memo of active) await this.upsert(memo);
+    for (const memo of active) {
+      // 이미 올린 뒤로 안 바뀐 일정은 건너뜀 (동기화 때마다 전체를 다시 올리지 않게)
+      if (!force && this.map[memo.id] && this.synced[memo.id] === (memo.updated || 0)) continue;
+      await this.upsert(memo);
+    }
 
     for (const memo of deleted) {
       if (this.map[memo.id]) await this.remove(memo.id);
     }
-    // 연결표에 있지만 memos에 아예 없는 항목 정리
-    const knownIds = new Set(all.map((x) => x.id));
-    for (const memoId of Object.keys(this.map)) {
-      if (!knownIds.has(memoId)) await this.remove(memoId);
+    // 연결표에 있지만 memos에 아예 없는 항목 정리 (메모 일정을 방금 최신으로 받았을 때만: 불확실하면 지우지 않음)
+    if (memosFresh) {
+      const knownIds = new Set(all.map((x) => x.id));
+      for (const memoId of Object.keys(this.map)) {
+        if (!knownIds.has(memoId)) await this.remove(memoId);
+      }
     }
 
     if (this.dirty) await this.syncMap(true);
@@ -170,9 +197,10 @@ const gcal = {
     this.timer = setTimeout(() => this.syncAll(), 2000);
   },
 
-  syncAll() {
+  // force: 안 바뀐 일정도 모두 다시 올림 (설정에서 켤 때·다시 연결할 때. 구글 캘린더에서 직접 지운 일정 복구)
+  syncAll(force = false) {
     if (!this.running) {
-      this.running = this._syncAll()
+      this.running = this._syncAll(force)
         .catch((e) => { if (e.message === 'AUTH' || !e.silent) console.warn('GCal 연동', e.message); })
         .finally(() => { this.running = null; });
     }

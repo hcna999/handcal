@@ -299,11 +299,11 @@ function bindPad() {
       if (!b) return;
       store.set('gcalOn', b.dataset.on === '1');
       if (typeof renderGcalStatus === 'function') renderGcalStatus();
-      if (typeof gcal !== 'undefined' && gcal.on()) gcal.syncAll().catch(handleErr);
+      if (typeof gcal !== 'undefined' && gcal.on()) gcal.syncAll(true).catch(handleErr);
     });
   }
   if ($('#gcal-reauth')) {
-    $('#gcal-reauth').onclick = () => connect('').then(() => { if (typeof gcal !== 'undefined') gcal.syncAll(); }).catch(handleErr);
+    $('#gcal-reauth').onclick = () => connect('').then(() => { if (typeof gcal !== 'undefined') gcal.syncAll(true); }).catch(handleErr);
   }
   $('#settings-btn').addEventListener('click', () => {
     renderTasksStatus();

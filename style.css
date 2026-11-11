@@ -1100,3 +1100,7 @@ body.in-day .side-backdrop { display: none !important; }
 }
 .goal-stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 2px; }
 .goal-stat-num { font-size: 1.05rem; font-weight: 700; color: var(--accent); }
+
+/* 검색 결과의 목표 */
+.search-goal .search-date { color: var(--accent); font-weight: 700; }
+.search-goal.done { color: var(--muted); }

@@ -271,6 +271,41 @@ async function run() {
   check('정상 연동 상태 텍스트', statusEl.textContent === '구글 캘린더 HandCalendar와 연동됨');
   check('정상 연동 시 reauth 버튼 숨김', reauthBtn.classList.contains('hidden'));
 
+  // 9. 앱이 실제로 저장하는 형식: 현지 자정을 ISO(UTC)로 적은 종일 일정 → 현지 날짜 그대로
+  const realAllDay = { id: 'r1', title: '실제 형식', allDay: true, start: new Date(2026, 10, 15).toISOString(), end: new Date(2026, 10, 16).toISOString(), updated: 5 };
+  const body9 = env1.gcal._eventBody(realAllDay);
+  check('현지 자정 ISO 종일 일정이 하루 밀리지 않음', body9.start.date === '2026-11-15' && body9.end.date === '2026-11-16', JSON.stringify(body9));
+  const realMulti = { ...realAllDay, end: new Date(2026, 10, 18).toISOString() };
+  check('여러 날 종일 일정 끝 날짜', env1.gcal._eventBody(realMulti).end.date === '2026-11-18');
+
+  // 10. 전체 동기화: 안 바뀐 일정은 다시 올리지 않고, 메모 일정을 못 받았으면 모르는 일정을 지우지 않음
+  const env10 = createMockEnv({ gcalOn: true, gcalCalId: 'cal10' });
+  const calls10 = [];
+  env10.gapi = async (url, opts = {}) => {
+    if (url.includes('/calendar/v3')) calls10.push({ url, method: opts.method || 'GET' });
+    if (opts.method === 'POST') return { id: 'ev_' + calls10.length };
+    return { files: [] };
+  };
+  env10.memos._items = [realAllDay];
+  env10.memos.sync = async () => {};
+  await env10.gcal.syncAll();
+  const firstWrites = calls10.filter((c) => c.method !== 'GET').length;
+  await env10.gcal.syncAll();
+  check('안 바뀐 일정은 다시 올리지 않음', firstWrites === 1 && calls10.filter((c) => c.method !== 'GET').length === 1, JSON.stringify(calls10));
+  env10.memos._items = [{ ...realAllDay, title: '고침', updated: 6 }];
+  await env10.gcal.syncAll();
+  check('바뀐 일정만 PUT', calls10.filter((c) => c.method === 'PUT').length === 1);
+  await env10.gcal.syncAll(true);
+  check('force면 안 바뀐 일정도 다시 올림', calls10.filter((c) => c.method === 'PUT').length === 2);
+
+  env10.gcal.map.other = 'ev_other'; // 다른 기기가 만든 일정 (이 기기 메모 목록에는 아직 없음)
+  env10.memos.sync = async () => { throw new Error('offline'); };
+  await env10.gcal.syncAll();
+  check('메모 일정을 못 받으면 모르는 일정을 지우지 않음', env10.gcal.map.other === 'ev_other' && !calls10.some((c) => c.method === 'DELETE'));
+  env10.memos.sync = async () => {};
+  await env10.gcal.syncAll();
+  check('메모 일정을 받은 뒤에는 없는 일정 정리', env10.gcal.map.other === undefined && calls10.some((c) => c.method === 'DELETE' && c.url.includes('ev_other')));
+
   // 최종 결과
   const failed = results.filter((r) => !r).length;
   console.log(`\n결과: ${results.length - failed}/${results.length} 통과`);

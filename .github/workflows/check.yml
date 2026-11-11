@@ -28,6 +28,10 @@ jobs:
         run: node tests/features.mjs
       - name: 동기화·안정성 확인
         run: node tests/sync.mjs
+      - name: 구글 캘린더 연동 확인
+        run: node tests/gcal.mjs
+      - name: 구독 피드 확인
+        run: node tests/worker-feed.mjs
       - name: 개발 안내 최신화 확인
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: |

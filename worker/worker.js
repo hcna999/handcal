@@ -686,10 +686,11 @@ async function serveFeed(env, url, cors, type) {
   }
 
   let ics;
+  const tz = validTz(env.TIMEZONE) || 'Asia/Seoul';
   try {
     if (type === 'memos') {
       const events = await readEventsFromDrive(access_token);
-      ics = buildMemosIcs(events);
+      ics = buildMemosIcs(events, tz);
     } else if (type === 'tasks') {
       const tasks = await readTasksFromGoogle(access_token);
       ics = buildTasksIcs(tasks);
@@ -698,7 +699,7 @@ async function serveFeed(env, url, cors, type) {
         readEventsFromDrive(access_token),
         readTasksFromGoogle(access_token),
       ]);
-      ics = buildAllIcs(events, tasks);
+      ics = buildAllIcs(events, tasks, tz);
     }
   } catch (e) {
     return new Response('피드 생성 실패: ' + e.message, { status: 502 });
@@ -824,7 +825,16 @@ function buildVevent(uid, dtstart, dtend, summary, lastmod) {
   return lines.join('\r\n');
 }
 
-function buildMemosIcs(events) {
+// 메모 일정의 start/end는 기기 현지 자정을 ISO(UTC)로 적은 값. 글자를 그대로 자르면 한국 시간에서는 하루 전날이 되므로 tz 기준 날짜로 바꿈
+function feedDay(v, tz) {
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const ms = Date.parse(s);
+  if (isNaN(ms)) return s.slice(0, 10);
+  return ymdUTC(utcToWall(ms, tz));
+}
+
+function buildMemosIcs(events, tz = 'Asia/Seoul') {
   const header = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -839,9 +849,10 @@ function buildMemosIcs(events) {
     const lastmod = ev.updated ? new Date(ev.updated).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z' : null;
 
     if (ev.allDay) {
-      const startStr = String(ev.start).slice(0, 10).replace(/-/g, '');
-      const endStr = ev.end ? String(ev.end).slice(0, 10).replace(/-/g, '') : nextDateStr(ev.start);
-      const endFinal = endStr === startStr ? nextDateStr(ev.start) : endStr;
+      const startDay = feedDay(ev.start, tz);
+      const startStr = startDay.replace(/-/g, '');
+      const endStr = ev.end ? feedDay(ev.end, tz).replace(/-/g, '') : nextDateStr(startDay);
+      const endFinal = endStr <= startStr ? nextDateStr(startDay) : endStr;
       return buildVevent(uid, ';VALUE=DATE:' + startStr, ';VALUE=DATE:' + endFinal, ev.title || '(제목 없음)', lastmod);
     } else {
       const startUtc = new Date(ev.start).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
@@ -873,7 +884,7 @@ function buildTasksIcs(tasks) {
   return [...header, ...vevents, 'END:VCALENDAR'].join('\r\n') + '\r\n';
 }
 
-function buildAllIcs(events, tasks) {
+function buildAllIcs(events, tasks, tz = 'Asia/Seoul') {
   const header = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -883,7 +894,7 @@ function buildAllIcs(events, tasks) {
     'X-WR-CALNAME:필기캘린더 (전체)',
     'X-WR-TIMEZONE:Asia/Seoul',
   ];
-  const memoLines = buildMemosIcs(events).split('\r\n');
+  const memoLines = buildMemosIcs(events, tz).split('\r\n');
   const memoEvents = [];
   let inEvent = false;
   let cur = [];
