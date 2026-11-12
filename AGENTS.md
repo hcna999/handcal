@@ -159,7 +159,7 @@
 
 ## 배포
 
-- **Claude + Gemini 협업 원칙**: 기능 추가 및 수정 시 반드시 Claude CLI(`claude.cmd -p`)로부터 아키텍처/UX 계획을 먼저 받고 Gemini가 구현 및 테스트를 담당한다.
+- **Gemini 자율 개발 및 테스트 원칙**: 기능 추가 및 수정 시 Gemini가 아키텍처/UX 설계부터 코드 구현, 테스트까지 단독으로 주도하여 처리한다. (Claude CLI 자동 호출은 사용량 보호를 위해 전면 제외하며, 사용자의 명시적 요청이 있을 때만 수동으로 사용한다.)
 - `main`에 푸시하면 앱 화면은 **GitHub Pages가 자동 배포**한다(1~2분).
   - 작업 완료 시 **반드시 `git push origin main`까지 실행**해야 사용자의 아이패드·폴드·PC 브라우저에 반영된다 (로컬 commit에 머무르지 말 것).
   - 푸시 후 `https://hcna999.github.io/handcal/sw.js`를 확인하여 새 버전이 배포되었는지 검증한다.
