@@ -328,6 +328,158 @@ async function openFeedModal() {
   wrap.replaceChildren(issueBtn, urlSection, guide, warn);
 }
 
+// 텔레그램 전용 봇 · PC 대화창(API) 빠른 추가 설정 모달
+async function openInboxModal() {
+  const curRefresh = store.get('refresh', null);
+  if (!auth.connected() && !curRefresh) {
+    toast('구글 로그인 후 사용할 수 있어요');
+    return;
+  }
+  const base = (CFG.WORKER_URL || '').replace(/\/$/, '');
+  if (!base) {
+    toast('서버 주소 설정이 필요해요');
+    return;
+  }
+
+  const wrap = el('div', 'feed-wrap');
+  wrap.append(el('p', 'muted-text', '빠른 추가 연동 상태를 확인하는 중…'));
+  openModal('빠른 추가 연동 (텔레그램 · PC)', [wrap]);
+
+  let cfg = { token: null, telegramConnected: false, telegramBotUsername: null, telegramChatCount: 0 };
+  try {
+    const res = await authFetch(`${base}/inbox/config`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) cfg = data;
+  } catch (e) {
+    console.warn('inboxConfigGet', e);
+  }
+
+  const render = () => {
+    const tokBtn = el('button', 'pill primary', cfg.token ? '연동 토큰 재발급 (기존 무효화)' : '연동 토큰 발급');
+    const tokArea = el('div', 'feed-urls');
+    if (cfg.token) {
+      const row = el('div', 'feed-row');
+      const lbl = el('span', 'feed-lbl', '연동 토큰 (PC .env용)');
+      const inp = el('input', 'feed-input');
+      inp.type = 'text';
+      inp.value = cfg.token;
+      inp.readOnly = true;
+      inp.onclick = () => inp.select();
+      const copyBtn = el('button', 'pill', '복사');
+      copyBtn.onclick = async () => {
+        try { await navigator.clipboard.writeText(cfg.token); }
+        catch { inp.select(); document.execCommand('copy'); }
+        copyBtn.textContent = '복사됨 ✓';
+        setTimeout(() => { copyBtn.textContent = '복사'; }, 2000);
+      };
+      row.append(lbl, inp, copyBtn);
+      tokArea.append(row);
+    }
+
+    tokBtn.onclick = async () => {
+      tokBtn.disabled = true;
+      tokBtn.textContent = '발급 중…';
+      try {
+        const res = await authFetch(`${base}/inbox/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: curRefresh, issueToken: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
+        cfg = { ...cfg, ...data };
+        toast('연동 토큰을 발급했어요');
+        render();
+      } catch (e) {
+        toast('발급 실패: ' + (e.message || '오류'));
+        tokBtn.disabled = false;
+        tokBtn.textContent = cfg.token ? '연동 토큰 재발급 (기존 무효화)' : '연동 토큰 발급';
+      }
+    };
+
+    const tgTitle = el('strong', null, '텔레그램 전용 봇 연동 (24시간 동작)');
+    tgTitle.style.marginTop = '8px';
+    const tgStatus = el(
+      'p',
+      'muted-text',
+      cfg.telegramConnected
+        ? `연결됨: @${cfg.telegramBotUsername || 'bot'} · 허용된 채팅 ${cfg.telegramChatCount || 0}개`
+        : '연결 안 됨 · @BotFather에서 새 봇 토큰을 받아 아래에 넣으세요.'
+    );
+    const tgInput = el('input', 'feed-input');
+    tgInput.type = 'password';
+    tgInput.placeholder = '텔레그램 봇 토큰 (예: 123456:ABC-DEF...)';
+    const tgRow = el('div', 'feed-row');
+    const tgBtn = el('button', 'pill primary', cfg.telegramConnected ? '봇 토큰 변경' : '텔레그램 봇 연결');
+    tgBtn.onclick = async () => {
+      const botToken = tgInput.value.trim();
+      if (!botToken) return toast('봇 토큰을 입력해 주세요');
+      tgBtn.disabled = true;
+      tgBtn.textContent = '연결 중…';
+      try {
+        const res = await authFetch(`${base}/inbox/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: curRefresh, telegramBotToken: botToken }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || 'HTTP ' + res.status);
+        cfg = { ...cfg, ...data };
+        toast('텔레그램 봇 Webhook을 연결했어요!');
+        render();
+      } catch (e) {
+        toast('연결 실패: ' + (e.message || '오류'));
+        tgBtn.disabled = false;
+        tgBtn.textContent = cfg.telegramConnected ? '봇 토큰 변경' : '텔레그램 봇 연결';
+      }
+    };
+    tgRow.append(tgInput, tgBtn);
+
+    const extras = [];
+    if (cfg.telegramConnected && cfg.token) {
+      const cmd = `/connect ${cfg.token}`;
+      const cmdRow = el('div', 'feed-row');
+      const cmdLbl = el('span', 'feed-lbl', '봇 채팅방에 처음 1번 보낼 명령어');
+      const cmdInp = el('input', 'feed-input');
+      cmdInp.type = 'text';
+      cmdInp.value = cmd;
+      cmdInp.readOnly = true;
+      cmdInp.onclick = () => cmdInp.select();
+      const cmdCopy = el('button', 'pill', '복사');
+      cmdCopy.onclick = async () => {
+        try { await navigator.clipboard.writeText(cmd); }
+        catch { cmdInp.select(); document.execCommand('copy'); }
+        cmdCopy.textContent = '복사됨 ✓';
+        setTimeout(() => { cmdCopy.textContent = '복사'; }, 2000);
+      };
+      cmdRow.append(cmdLbl, cmdInp, cmdCopy);
+      extras.push(cmdRow);
+
+      const discBtn = el('button', 'pill danger', '텔레그램 봇 연결 해제');
+      discBtn.onclick = async () => {
+        if (!confirm('텔레그램 봇 연결을 해제할까요?')) return;
+        const res = await authFetch(`${base}/inbox/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ disconnectTelegram: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) { cfg = { ...cfg, ...data }; toast('텔레그램 봇 연결을 해제했어요'); render(); }
+      };
+      extras.push(discBtn);
+    }
+
+    const guide = el(
+      'p',
+      'feed-guide',
+      '• 예시: "내일 3시 치과 예약", "11/25 연차", "할일 우유 사기", "그냥 메모 내용"\n• 조회: "/오늘", "/내일" · 되돌리기: "/취소"'
+    );
+    const warn = el('p', 'feed-warn', '⚠ 연동 토큰은 내 드라이브에 일정·메모를 쓰는 열쇠예요. 타인에게 공유하지 마세요.');
+    wrap.replaceChildren(tokBtn, tokArea, tgTitle, tgStatus, tgRow, ...extras, guide, warn);
+  };
+  render();
+}
+
 function rerender() {
   if (state.view === 'month') renderMonth();
   else renderDayEvents();

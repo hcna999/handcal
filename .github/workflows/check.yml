@@ -32,6 +32,8 @@ jobs:
         run: node tests/gcal.mjs
       - name: 구독 피드 확인
         run: node tests/worker-feed.mjs
+      - name: 빠른 추가 확인
+        run: node tests/worker-inbox.mjs
       - name: 개발 안내 최신화 확인
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: |

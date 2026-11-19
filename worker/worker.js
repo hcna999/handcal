@@ -19,7 +19,7 @@ export default {
     const allowed = (env.ALLOWED_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
     const cors = {
       'Access-Control-Allow-Origin': allowed.includes(origin) ? origin : allowed[0] || '*',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Inbox-Token',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
@@ -43,6 +43,24 @@ export default {
         return await serveFeed(env, url, cors, 'tasks');
       } else if (url.pathname === '/feed/all.ics' && req.method === 'GET') {
         return await serveFeed(env, url, cors, 'all');
+      } else if (url.pathname === '/inbox/config' && req.method === 'GET') {
+        await requireOwner(req, env);
+        body = await inboxConfigGet(env);
+      } else if (url.pathname === '/inbox/config' && req.method === 'POST') {
+        await requireOwner(req, env);
+        body = await inboxConfigSet(env, await req.json(), url.origin);
+      } else if (url.pathname === '/inbox/add' && req.method === 'POST') {
+        await requireInboxToken(req, env);
+        body = await inboxAdd(env, await req.json());
+      } else if (url.pathname === '/inbox/undo' && req.method === 'POST') {
+        await requireInboxToken(req, env);
+        body = await inboxUndo(env);
+      } else if (url.pathname === '/inbox/summary' && req.method === 'GET') {
+        await requireInboxToken(req, env);
+        body = await inboxSummary(env, url.searchParams.get('date'));
+      } else if (url.pathname.startsWith('/telegram/webhook/') && req.method === 'POST') {
+        const secret = url.pathname.slice('/telegram/webhook/'.length);
+        body = await handleTelegramWebhook(env, secret, await req.json());
       } else if (url.pathname === '/naver/events' && req.method === 'GET') {
         await requireOwner(req, env);
         body = await naverEvents(env, url.searchParams.get('start'), url.searchParams.get('end'));
@@ -60,7 +78,7 @@ export default {
       } else if (['/ocr', '/transcribe'].includes(url.pathname) || url.pathname.startsWith('/refine/')) {
         throw httpError(501, 'gemini_disabled', 'Gemini API 연결이 비활성화되었습니다. 외부 API 호출을 하지 않습니다.');
       } else if (url.pathname === '/') {
-        body = { ok: true, service: 'handcal', link: !!env.HANDCAL_KV, naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: false, feed: !!env.HANDCAL_KV };
+        body = { ok: true, service: 'handcal', link: !!env.HANDCAL_KV, naver: !!(env.NAVER_ID && env.NAVER_APP_PASSWORD), google: !!env.GOOGLE_CLIENT_SECRET, gemini: false, feed: !!env.HANDCAL_KV, inbox: !!env.HANDCAL_KV };
       } else return json({ error: 'not_found' }, 404, cors);
       return json(body, 200, cors);
     } catch (e) {
@@ -110,12 +128,18 @@ async function exchange(env, { code }) {
   if (!code) throw httpError(400, 'no_code');
   const t = await googleToken(env, { code, grant_type: 'authorization_code', redirect_uri: 'postmessage' });
   checkOwner(env, emailFromIdToken(t.id_token));
+  if (t.refresh_token && env.HANDCAL_KV) {
+    await env.HANDCAL_KV.put('owner_refresh_token', t.refresh_token).catch(() => {});
+  }
   return { access_token: t.access_token, expires_in: t.expires_in, refresh_token: t.refresh_token || null };
 }
 
 async function refresh(env, { refresh_token }) {
   if (!refresh_token) throw httpError(400, 'no_refresh_token');
   const t = await googleToken(env, { refresh_token, grant_type: 'refresh_token' });
+  if (env.HANDCAL_KV) {
+    await env.HANDCAL_KV.put('owner_refresh_token', refresh_token).catch(() => {});
+  }
   return { access_token: t.access_token, expires_in: t.expires_in };
 }
 
@@ -917,4 +941,644 @@ function buildAllIcs(events, tasks, tz = 'Asia/Seoul') {
   return [...header, ...memoEvents, ...taskEvents, 'END:VCALENDAR'].join('\r\n') + '\r\n';
 }
 
-export const _test = { parseICS, expandEvents, occurrences, linkCreate, linkClaim, feedTokenCreate, feedTokenGet, buildMemosIcs, buildTasksIcs, buildAllIcs };
+// ---------- 빠른 추가 (Inbox API & 텔레그램 Webhook)
+const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
+const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
+
+async function getInboxMeta(env) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing', 'KV 저장소(HANDCAL_KV)가 연결되지 않았어요');
+  return (await env.HANDCAL_KV.get('inbox_meta', 'json')) || {};
+}
+
+async function getOwnerRefreshToken(env) {
+  const meta = await getInboxMeta(env);
+  if (meta.refresh_token) return meta.refresh_token;
+  const backed = await env.HANDCAL_KV.get('owner_refresh_token');
+  if (backed) return backed;
+  const fmeta = await env.HANDCAL_KV.get('feed_meta', 'json');
+  if (fmeta?.token) {
+    const fdata = await env.HANDCAL_KV.get('feed:' + fmeta.token, 'json');
+    if (fdata?.refresh_token) return fdata.refresh_token;
+  }
+  throw httpError(400, 'no_refresh_token', '구글 로그인 정보가 서버에 없어요. 앱 설정 → 빠른 추가에서 연동 토큰을 발급해 주세요.');
+}
+
+async function getOwnerAccessToken(env) {
+  const rt = await getOwnerRefreshToken(env);
+  const t = await googleToken(env, { refresh_token: rt, grant_type: 'refresh_token' });
+  return t.access_token;
+}
+
+async function requireInboxToken(req, env) {
+  const meta = await getInboxMeta(env);
+  if (!meta.token) throw httpError(401, 'inbox_not_configured', '빠른 추가 토큰이 아직 발급되지 않았어요');
+  const hdr = req.headers.get('X-Inbox-Token') || (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!hdr || hdr !== meta.token) throw httpError(401, 'invalid_inbox_token', '연동 토큰이 맞지 않아요');
+}
+
+async function inboxConfigGet(env) {
+  const meta = await getInboxMeta(env);
+  return {
+    token: meta.token || null,
+    hasRefreshToken: !!(meta.refresh_token || await env.HANDCAL_KV.get('owner_refresh_token')),
+    telegramConnected: !!meta.tgBotToken,
+    telegramBotUsername: meta.tgBotUsername || null,
+    telegramChatCount: Array.isArray(meta.tgChatIds) ? meta.tgChatIds.length : 0,
+  };
+}
+
+async function inboxConfigSet(env, body, origin) {
+  const meta = await getInboxMeta(env);
+  if (body?.refresh_token) meta.refresh_token = String(body.refresh_token);
+  if (body?.issueToken || !meta.token) {
+    meta.token = crypto.randomUUID().replace(/-/g, '');
+  }
+  if (body?.disconnectTelegram) {
+    if (meta.tgBotToken) {
+      await fetch(`https://api.telegram.org/bot${meta.tgBotToken}/deleteWebhook`, { method: 'POST' }).catch(() => {});
+    }
+    delete meta.tgBotToken;
+    delete meta.tgBotUsername;
+    delete meta.tgSecret;
+    delete meta.tgChatIds;
+  } else if (body?.telegramBotToken) {
+    const botToken = String(body.telegramBotToken).trim();
+    const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+    const meData = await meRes.json().catch(() => ({}));
+    if (!meRes.ok || !meData.ok) {
+      throw httpError(400, 'invalid_bot_token', '텔레그램 봇 토큰이 유효하지 않아요 (@BotFather 토큰을 확인하세요)');
+    }
+    const secret = crypto.randomUUID().replace(/-/g, '');
+    const webhookUrl = `${origin.replace(/\/$/, '')}/telegram/webhook/${secret}`;
+    const whRes = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message'] }),
+    });
+    const whData = await whRes.json().catch(() => ({}));
+    if (!whRes.ok || !whData.ok) {
+      throw httpError(502, 'webhook_failed', '텔레그램 Webhook 등록 실패: ' + (whData.description || whRes.status));
+    }
+    meta.tgBotToken = botToken;
+    meta.tgBotUsername = meData.result?.username || '';
+    meta.tgSecret = secret;
+    if (!Array.isArray(meta.tgChatIds)) meta.tgChatIds = [];
+  }
+  if (body?.telegramChatId) {
+    const cid = String(body.telegramChatId).trim();
+    if (cid) {
+      meta.tgChatIds = Array.from(new Set([...(meta.tgChatIds || []), cid]));
+    }
+  }
+  meta.updatedAt = Date.now();
+  await env.HANDCAL_KV.put('inbox_meta', JSON.stringify(meta));
+  return {
+    token: meta.token,
+    telegramConnected: !!meta.tgBotToken,
+    telegramBotUsername: meta.tgBotUsername || null,
+    telegramChatCount: Array.isArray(meta.tgChatIds) ? meta.tgChatIds.length : 0,
+  };
+}
+
+// ---------- Google Drive 읽기/쓰기 헬퍼 (필기캘린더 폴더)
+async function ensureDriveFolder(access_token) {
+  const q = encodeURIComponent("name='필기캘린더' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+  const r = await fetch(`${DRIVE_FILES}?q=${q}&fields=files(id)&spaces=drive`, {
+    headers: { Authorization: 'Bearer ' + access_token },
+  });
+  if (!r.ok) throw httpError(502, 'drive_error', `드라이브 폴더 조회 실패 (${r.status})`);
+  const data = await r.json();
+  if (data.files?.length) return data.files[0].id;
+  const c = await fetch(`${DRIVE_FILES}?fields=id`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + access_token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '필기캘린더', mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  if (!c.ok) throw httpError(502, 'drive_error', `드라이브 폴더 생성 실패 (${c.status})`);
+  return (await c.json()).id;
+}
+
+async function driveFindInFolder(access_token, folderId, name) {
+  const safeName = name.replace(/'/g, "\\'");
+  const q = encodeURIComponent(`'${folderId}' in parents and name='${safeName}' and trashed=false`);
+  const r = await fetch(`${DRIVE_FILES}?q=${q}&fields=files(id,modifiedTime)&spaces=drive`, {
+    headers: { Authorization: 'Bearer ' + access_token },
+  });
+  if (!r.ok) throw httpError(502, 'drive_error', `드라이브 파일 검색 실패 (${r.status})`);
+  const data = await r.json();
+  return data.files?.[0] || null;
+}
+
+async function driveReadJson(access_token, fileId) {
+  const r = await fetch(`${DRIVE_FILES}/${fileId}?alt=media`, {
+    headers: { Authorization: 'Bearer ' + access_token },
+  });
+  if (!r.ok) throw httpError(502, 'drive_error', `드라이브 파일 읽기 실패 (${r.status})`);
+  return await r.json().catch(() => null);
+}
+
+async function driveWriteJson(access_token, folderId, name, existingFileId, obj) {
+  if (existingFileId) {
+    const r = await fetch(`${DRIVE_UPLOAD}/${existingFileId}?uploadType=media&fields=id,modifiedTime`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + access_token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(obj),
+    });
+    if (!r.ok) throw httpError(502, 'drive_error', `드라이브 파일 수정 실패 (${r.status})`);
+    return await r.json();
+  }
+  const b = 'hc' + Math.random().toString(36).slice(2);
+  const body =
+    `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+    JSON.stringify({ name, parents: [folderId], mimeType: 'application/json' }) +
+    `\r\n--${b}\r\nContent-Type: application/json\r\n\r\n` +
+    JSON.stringify(obj) +
+    `\r\n--${b}--`;
+  const r = await fetch(`${DRIVE_UPLOAD}?uploadType=multipart&fields=id,modifiedTime`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + access_token, 'Content-Type': `multipart/related; boundary=${b}` },
+    body,
+  });
+  if (!r.ok) throw httpError(502, 'drive_error', `드라이브 파일 생성 실패 (${r.status})`);
+  return await r.json();
+}
+
+// ---------- 한국어 자연어 빠른 입력 파서
+const KO_WDAYS = { 일: 0, 월: 1, 화: 2, 수: 3, 목: 4, 금: 5, 토: 6 };
+const pad2w = (n) => String(n).padStart(2, '0');
+const addDaysYmd = (baseYmd, delta) => {
+  const [y, m, d] = baseYmd.split('-').map(Number);
+  return ymdUTC(Date.UTC(y, m - 1, d + delta));
+};
+
+function resolveHour(period, hour, isColon) {
+  let h = Number(hour);
+  if (period) {
+    if (/오후|저녁|밤/.test(period)) {
+      if (h >= 1 && h <= 11) h += 12;
+    } else if (/오전|아침|새벽/.test(period)) {
+      if (h === 12) h = 0;
+    }
+  } else if (!isColon && h >= 1 && h <= 6) {
+    // '3시 치과'처럼 오전/오후 없이 1~6시로 적으면 일상 일정상 오후로 해석
+    h += 12;
+  }
+  return Math.max(0, Math.min(23, h));
+}
+
+function parseQuickInput(rawText, nowMs = Date.now(), tz = 'Asia/Seoul') {
+  const raw = String(rawText || '').trim();
+  const nowWall = utcToWall(nowMs, tz);
+  const today = ymdUTC(nowWall);
+  const tomorrow = addDaysYmd(today, 1);
+
+  if (!raw || /^(\/start|\/help|\/도움|도움말?)$/i.test(raw)) return { action: 'help' };
+  const connM = /^\/connect\s+([A-Za-z0-9_-]+)$/i.exec(raw);
+  if (connM) return { action: 'connect', token: connM[1] };
+  if (/^(\/오늘|오늘|오늘\s*일정)$/i.test(raw)) return { action: 'summary', date: today };
+  if (/^(\/내일|내일|내일\s*일정)$/i.test(raw)) return { action: 'summary', date: tomorrow };
+  if (/^(\/취소|취소|\/undo|되돌리기)$/i.test(raw)) return { action: 'undo' };
+
+  let text = raw;
+  let forcedKind = null;
+  if (/^(\/일정|일정[:：]?)\s+/i.test(text)) {
+    forcedKind = 'event';
+    text = text.replace(/^(\/일정|일정[:：]?)\s+/i, '');
+  } else if (/^(\/할일|할\s*일[:：]?|☐\s*|-\s*\[\s*\]\s*|\[\s*\]\s*)/i.test(text)) {
+    forcedKind = 'todo';
+    text = text.replace(/^(\/할일|할\s*일[:：]?|☐\s*|-\s*\[\s*\]\s*|\[\s*\]\s*)/i, '');
+  } else if (/^(\/메모|메모[:：]?)\s+/i.test(text)) {
+    forcedKind = 'note';
+    text = text.replace(/^(\/메모|메모[:：]?)\s+/i, '');
+  }
+
+  // 날짜 파싱
+  let date = today;
+  let hasDate = false;
+  const nowD = new Date(nowWall);
+  const curY = nowD.getUTCFullYear();
+  const curM = nowD.getUTCMonth() + 1;
+  const curDow = nowD.getUTCDay();
+
+  const tryDate = (re, fn) => {
+    if (hasDate) return;
+    const m = re.exec(text);
+    if (!m) return;
+    const res = fn(m);
+    if (!res) return;
+    date = res;
+    hasDate = true;
+    text = (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).replace(/[ \t]+/g, ' ').trim();
+  };
+
+  tryDate(/(?:^|\s)(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?=\s|$)/, (m) => {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return `${y}-${pad2w(mo)}-${pad2w(d)}`;
+  });
+  tryDate(/(?:^|\s)(\d{1,2})월\s*(\d{1,2})일(?=\s|$)/, (m) => {
+    const mo = +m[1], d = +m[2];
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const y = mo < curM - 1 ? curY + 1 : curY;
+    return `${y}-${pad2w(mo)}-${pad2w(d)}`;
+  });
+  tryDate(/(?:^|\s)(\d{1,2})\/(\d{1,2})(?=\s|$)/, (m) => {
+    const mo = +m[1], d = +m[2];
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const y = mo < curM - 1 ? curY + 1 : curY;
+    return `${y}-${pad2w(mo)}-${pad2w(d)}`;
+  });
+  tryDate(/(?:^|\s)(오늘|내일|모레|글피)(?=\s|$)/, (m) => {
+    const off = { 오늘: 0, 내일: 1, 모레: 2, 글피: 3 }[m[1]];
+    return addDaysYmd(today, off);
+  });
+  tryDate(/(?:^|\s)(이번\s*주|다음\s*주)?\s*([일월화수목금토])요일(?=\s|$)/, (m) => {
+    const target = KO_WDAYS[m[2]];
+    let diff = (target - curDow + 7) % 7;
+    if (m[1] && /다음/.test(m[1])) {
+      const daysUntilNextMon = ((1 - curDow + 7) % 7) || 7;
+      const offsetFromMon = (target + 6) % 7;
+      diff = daysUntilNextMon + offsetFromMon;
+    } else if (!m[1] && diff === 0) {
+      diff = 7; // 오늘과 같은 요일을 '수요일'이라 하면 다음 수요일
+    }
+    return addDaysYmd(today, diff);
+  });
+
+  // 시간 파싱 (메모 강제가 아닐 때만)
+  let startTime = null;
+  let endTime = null;
+  if (forcedKind !== 'note') {
+    const tryTime = (re, fn) => {
+      if (startTime) return;
+      const m = re.exec(text);
+      if (!m) return;
+      const res = fn(m);
+      if (!res) return;
+      startTime = res.start;
+      endTime = res.end || null;
+      text = (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).replace(/[ \t]+/g, ' ').trim();
+    };
+
+    // 범위: 14:00~15:30 / 오후 2시~4시 / 2시 반-4시
+    tryTime(
+      /(?:^|\s)(오전|오후|저녁|밤|아침|새벽)?\s*(\d{1,2})(?::(\d{2})|\s*시(?:\s*(\d{1,2})\s*분|\s*(반))?)\s*[~\-]\s*(오전|오후|저녁|밤|아침|새벽)?\s*(\d{1,2})(?::(\d{2})|\s*시(?:\s*(\d{1,2})\s*분|\s*(반))?)(?=\s|$)/,
+      (m) => {
+        const isColon1 = m[3] !== undefined;
+        const isColon2 = m[8] !== undefined;
+        const h1 = resolveHour(m[1], m[2], isColon1);
+        const m1 = isColon1 ? +m[3] : m[5] ? 30 : m[4] ? +m[4] : 0;
+        const p2 = m[6] || m[1];
+        const h2 = resolveHour(p2, m[7], isColon2);
+        const m2 = isColon2 ? +m[8] : m[10] ? 30 : m[9] ? +m[9] : 0;
+        if (m1 > 59 || m2 > 59) return null;
+        return { start: `${pad2w(h1)}:${pad2w(m1)}`, end: `${pad2w(h2)}:${pad2w(m2)}` };
+      }
+    );
+    // 단일 콜론: 14:30 / 오후 3:30
+    tryTime(/(?:^|\s)(오전|오후|저녁|밤|아침|새벽)?\s*(\d{1,2}):(\d{2})(?=\s|$)/, (m) => {
+      const h = resolveHour(m[1], m[2], true);
+      const mi = +m[3];
+      if (mi > 59) return null;
+      return { start: `${pad2w(h)}:${pad2w(mi)}` };
+    });
+    // 단일 N시 (M분|반)
+    tryTime(/(?:^|\s)(오전|오후|저녁|밤|아침|새벽)?\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분|\s*(반))?(?=\s|$)/, (m) => {
+      const h = resolveHour(m[1], m[2], false);
+      const mi = m[4] ? 30 : m[3] ? +m[3] : 0;
+      if (mi > 59) return null;
+      return { start: `${pad2w(h)}:${pad2w(mi)}` };
+    });
+  }
+
+  const title = text.trim() || raw;
+  let kind = forcedKind;
+  if (!kind) {
+    if (startTime) kind = 'event';
+    else if (hasDate && !raw.includes('\n') && title.length <= 45) kind = 'event';
+    else kind = 'note';
+  }
+
+  return {
+    action: 'add',
+    kind,
+    date,
+    startTime,
+    endTime,
+    allDay: kind === 'event' ? !startTime : true,
+    title,
+    raw,
+  };
+}
+
+function buildEventTimestamps(dateStr, startTime, endTime, allDay, tz) {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  if (allDay || !startTime) {
+    const sWall = Date.UTC(y, mo - 1, d, 0, 0, 0);
+    const eWall = Date.UTC(y, mo - 1, d + 1, 0, 0, 0);
+    return {
+      allDay: true,
+      start: new Date(wallToUtc(sWall, tz)).toISOString(),
+      end: new Date(wallToUtc(eWall, tz)).toISOString(),
+    };
+  }
+  const [sh, sm] = startTime.split(':').map(Number);
+  const sWall = Date.UTC(y, mo - 1, d, sh, sm, 0);
+  let eWall;
+  if (endTime) {
+    const [eh, em] = endTime.split(':').map(Number);
+    eWall = Date.UTC(y, mo - 1, d, eh, em, 0);
+    if (eWall <= sWall) eWall = sWall + 3600e3;
+  } else {
+    eWall = sWall + 3600e3;
+  }
+  return {
+    allDay: false,
+    start: new Date(wallToUtc(sWall, tz)).toISOString(),
+    end: new Date(wallToUtc(eWall, tz)).toISOString(),
+  };
+}
+
+async function addEventToDrive(access_token, item, tz) {
+  const folderId = await ensureDriveFolder(access_token);
+  const existing = await driveFindInFolder(access_token, folderId, 'events.json');
+  let events = [];
+  if (existing) {
+    const raw = await driveReadJson(access_token, existing.id);
+    if (Array.isArray(raw?.events)) events = raw.events;
+  }
+  const ts = buildEventTimestamps(item.date, item.startTime, item.endTime, item.allDay, tz);
+  const id = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const ev = {
+    id,
+    title: item.title,
+    allDay: ts.allDay,
+    start: ts.start,
+    end: ts.end,
+    updated: Date.now(),
+  };
+  events.push(ev);
+  await driveWriteJson(access_token, folderId, 'events.json', existing?.id || null, { v: 1, events });
+  return { ok: true, kind: 'event', id, date: item.date, startTime: item.startTime, endTime: item.endTime, allDay: ts.allDay, title: item.title };
+}
+
+async function addNoteOrTodoToDrive(access_token, item) {
+  const folderId = await ensureDriveFolder(access_token);
+  const fileName = `${item.date}.json`;
+  const existing = await driveFindInFolder(access_token, folderId, fileName);
+  const now = Date.now();
+  let doc = existing ? await driveReadJson(access_token, existing.id) : null;
+  if (!doc || !Array.isArray(doc.pages) || !doc.pages.length) {
+    doc = { v: 2, pages: [{ id: 'p' + now.toString(36) + Math.random().toString(36).slice(2, 6), height: 1414, strokes: [], kind: 'text', text: '', t: now }], updated: now };
+  }
+  let page = doc.pages.find((p) => !p.conflict && p.kind === 'text');
+  if (!page) {
+    if (doc.pages.length < 5) {
+      page = { id: 'p' + now.toString(36) + Math.random().toString(36).slice(2, 6), height: 1414, strokes: [], kind: 'text', text: '', t: now };
+      doc.pages.push(page);
+    } else {
+      page = doc.pages[0];
+      page.kind = 'text';
+      page.text = page.text || '';
+    }
+  }
+  const line = item.kind === 'todo' ? `☐ ${item.title}` : item.title;
+  const cur = String(page.text || '').replace(/\s+$/, '');
+  page.text = cur ? `${cur}\n${line}` : line;
+  page.t = now;
+  doc.updated = now;
+  await driveWriteJson(access_token, folderId, fileName, existing?.id || null, doc);
+  return { ok: true, kind: item.kind, date: item.date, pageId: page.id, line, title: item.title };
+}
+
+async function inboxAdd(env, body) {
+  const tz = validTz(env.TIMEZONE) || 'Asia/Seoul';
+  let item;
+  if (body?.kind && (body?.title || body?.text)) {
+    const today = ymdUTC(utcToWall(Date.now(), tz));
+    item = {
+      action: 'add',
+      kind: ['event', 'todo', 'note'].includes(body.kind) ? body.kind : 'note',
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : today,
+      startTime: body.startTime || null,
+      endTime: body.endTime || null,
+      allDay: body.allDay !== undefined ? !!body.allDay : !body.startTime,
+      title: String(body.title || body.text).trim(),
+    };
+  } else {
+    const parsed = parseQuickInput(body?.text || '', Date.now(), tz);
+    if (parsed.action !== 'add') throw httpError(400, 'not_add_command', '추가할 내용을 입력해 주세요');
+    item = parsed;
+  }
+  const access_token = await getOwnerAccessToken(env);
+  const res = item.kind === 'event'
+    ? await addEventToDrive(access_token, item, tz)
+    : await addNoteOrTodoToDrive(access_token, item);
+  if (env.HANDCAL_KV) {
+    await env.HANDCAL_KV.put('inbox_last', JSON.stringify(res), { expirationTtl: 86400 }).catch(() => {});
+  }
+  return res;
+}
+
+async function inboxUndo(env) {
+  if (!env.HANDCAL_KV) throw httpError(501, 'kv_missing');
+  const last = await env.HANDCAL_KV.get('inbox_last', 'json');
+  if (!last) return { ok: false, message: '되돌릴 최근 항목이 없어요' };
+  const access_token = await getOwnerAccessToken(env);
+  const folderId = await ensureDriveFolder(access_token);
+  if (last.kind === 'event') {
+    const existing = await driveFindInFolder(access_token, folderId, 'events.json');
+    if (existing) {
+      const raw = await driveReadJson(access_token, existing.id);
+      const events = (raw?.events || []).map((e) => (e.id === last.id ? { id: e.id, deleted: true, updated: Date.now() } : e));
+      await driveWriteJson(access_token, folderId, 'events.json', existing.id, { v: 1, events });
+    }
+  } else {
+    const fileName = `${last.date}.json`;
+    const existing = await driveFindInFolder(access_token, folderId, fileName);
+    if (existing) {
+      const doc = await driveReadJson(access_token, existing.id);
+      const page = (doc?.pages || []).find((p) => p.id === last.pageId) || (doc?.pages || []).find((p) => p.kind === 'text');
+      if (page && typeof page.text === 'string') {
+        const lines = page.text.split('\n');
+        const idx = lines.lastIndexOf(last.line);
+        if (idx >= 0) {
+          lines.splice(idx, 1);
+          page.text = lines.join('\n');
+          page.t = Date.now();
+          doc.updated = Date.now();
+          await driveWriteJson(access_token, folderId, fileName, existing.id, doc);
+        }
+      }
+    }
+  }
+  await env.HANDCAL_KV.delete('inbox_last').catch(() => {});
+  return { ok: true, undone: last };
+}
+
+async function inboxSummary(env, dateParam) {
+  const tz = validTz(env.TIMEZONE) || 'Asia/Seoul';
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(dateParam || '')) ? dateParam : ymdUTC(utcToWall(Date.now(), tz));
+  const access_token = await getOwnerAccessToken(env);
+  const folderId = await ensureDriveFolder(access_token);
+
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const dayStartIso = new Date(wallToUtc(Date.UTC(y, mo - 1, d, 0, 0, 0), tz)).toISOString();
+  const dayEndIso = new Date(wallToUtc(Date.UTC(y, mo - 1, d + 1, 0, 0, 0), tz)).toISOString();
+
+  const [memoEvents, naverRes, noteFile] = await Promise.all([
+    readEventsFromDrive(access_token).catch(() => []),
+    env.NAVER_ID && env.NAVER_APP_PASSWORD ? naverEvents(env, dayStartIso, dayEndIso).catch(() => ({ events: [] })) : Promise.resolve({ events: [] }),
+    driveFindInFolder(access_token, folderId, `${dateStr}.json`).catch(() => null),
+  ]);
+
+  const dayStartMs = Date.parse(dayStartIso), dayEndMs = Date.parse(dayEndIso);
+  const fmtHm = (iso) => {
+    const w = new Date(utcToWall(Date.parse(iso), tz));
+    return `${pad2w(w.getUTCHours())}:${pad2w(w.getUTCMinutes())}`;
+  };
+
+  const dayEvents = [];
+  for (const ev of memoEvents) {
+    const s = Date.parse(ev.start), e = Date.parse(ev.end || ev.start);
+    if (s < dayEndMs && (e > dayStartMs || (e === s && s >= dayStartMs))) {
+      dayEvents.push({ title: ev.title, time: ev.allDay ? '종일' : fmtHm(ev.start), source: '메모' });
+    }
+  }
+  for (const ev of naverRes.events || []) {
+    if (ev.allDay) {
+      if (ev.start <= dateStr && ev.end > dateStr) dayEvents.push({ title: ev.title, time: '종일', source: ev.calendar || '네이버' });
+    } else {
+      const s = Date.parse(ev.start), e = Date.parse(ev.end || ev.start);
+      if (s < dayEndMs && (e > dayStartMs || (e === s && s >= dayStartMs))) {
+        dayEvents.push({ title: ev.title, time: fmtHm(ev.start), source: ev.calendar || '네이버' });
+      }
+    }
+  }
+  dayEvents.sort((a, b) => (a.time === '종일' ? -1 : b.time === '종일' ? 1 : a.time.localeCompare(b.time)));
+
+  const todos = [];
+  const notes = [];
+  if (noteFile) {
+    const doc = await driveReadJson(access_token, noteFile.id).catch(() => null);
+    for (const p of doc?.pages || []) {
+      if (p.conflict) continue;
+      if (p.kind === 'text' && p.text) {
+        for (const rawLine of p.text.split('\n')) {
+          const l = rawLine.trim();
+          if (!l) continue;
+          if (/^[☐☑✓✔]/.test(l)) todos.push(l);
+          else notes.push(l);
+        }
+      }
+    }
+  }
+  return { ok: true, date: dateStr, events: dayEvents, todos, notes };
+}
+
+function formatSummaryText(s) {
+  const lines = [`📆 ${s.date}`];
+  if (s.events.length) {
+    lines.push('\n[일정]');
+    for (const e of s.events) lines.push(`• ${e.time} ${e.title}`);
+  }
+  if (s.todos.length) {
+    lines.push('\n[할 일]');
+    for (const t of s.todos) lines.push(t);
+  }
+  if (s.notes.length) {
+    lines.push('\n[메모]');
+    for (const n of s.notes.slice(0, 10)) lines.push(`- ${n}`);
+    if (s.notes.length > 10) lines.push(`… 외 ${s.notes.length - 10}줄`);
+  }
+  if (!s.events.length && !s.todos.length && !s.notes.length) {
+    lines.push('등록된 일정이나 메모가 없어요.');
+  }
+  return lines.join('\n');
+}
+
+async function tgSend(botToken, chatId, text) {
+  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text }),
+  }).catch(() => {});
+}
+
+async function handleTelegramWebhook(env, secret, update) {
+  const meta = await getInboxMeta(env);
+  if (!meta.tgBotToken || !meta.tgSecret || secret !== meta.tgSecret) {
+    throw httpError(403, 'forbidden');
+  }
+  const msg = update?.message;
+  const chatId = msg?.chat?.id ? String(msg.chat.id) : null;
+  const text = (msg?.text || '').trim();
+  if (!chatId || !text) return { ok: true };
+
+  const tz = validTz(env.TIMEZONE) || 'Asia/Seoul';
+  const parsed = parseQuickInput(text, Date.now(), tz);
+
+  // 최초 1회 페어링: /connect <토큰>
+  if (parsed.action === 'connect') {
+    if (parsed.token === meta.token) {
+      meta.tgChatIds = Array.from(new Set([...(meta.tgChatIds || []), chatId]));
+      await env.HANDCAL_KV.put('inbox_meta', JSON.stringify(meta));
+      await tgSend(meta.tgBotToken, chatId, '✅ 핸드캘린더 연결 완료!\n이제 일정·할 일·메모를 편하게 보내보세요.\n\n예시:\n• 내일 3시 치과 예약\n• 11/25 연차\n• 할일 우유 사기\n• 오늘 회의 내용 메모\n• /오늘, /내일, /취소');
+    } else {
+      await tgSend(meta.tgBotToken, chatId, '❌ 연결 토큰이 맞지 않아요. 핸드캘린더 ⚙ → 빠른 추가에서 토큰을 확인해 주세요.');
+    }
+    return { ok: true };
+  }
+
+  if (!Array.isArray(meta.tgChatIds) || !meta.tgChatIds.includes(chatId)) {
+    await tgSend(meta.tgBotToken, chatId, '🔒 아직 연결되지 않은 채팅이에요.\n핸드캘린더 앱 ⚙ → [빠른 추가]에서 복사한 `/connect ...` 명령어를 먼저 보내주세요.');
+    return { ok: true };
+  }
+
+  try {
+    if (parsed.action === 'help') {
+      await tgSend(
+        meta.tgBotToken,
+        chatId,
+        '📌 핸드캘린더 빠른 추가 사용법\n\n' +
+          '• 일정: 내일 3시 치과 / 11/25 14:00~16:00 미팅 / 12월 1일 연차\n' +
+          '• 할 일: 할일 우유 사기 / ☐ 내일 서류 제출\n' +
+          '• 메모: 그냥 내용 입력 (또는 메모: ...)\n' +
+          '• 조회: /오늘, /내일\n' +
+          '• 되돌리기: /취소'
+      );
+    } else if (parsed.action === 'summary') {
+      const s = await inboxSummary(env, parsed.date);
+      await tgSend(meta.tgBotToken, chatId, formatSummaryText(s));
+    } else if (parsed.action === 'undo') {
+      const r = await inboxUndo(env);
+      await tgSend(meta.tgBotToken, chatId, r.ok ? `↩️ 방금 추가한 항목을 취소했어요: ${r.undone.title}` : r.message);
+    } else {
+      const res = await inboxAdd(env, {
+        kind: parsed.kind,
+        date: parsed.date,
+        startTime: parsed.startTime,
+        endTime: parsed.endTime,
+        allDay: parsed.allDay,
+        title: parsed.title,
+      });
+      if (res.kind === 'event') {
+        const timeTxt = res.allDay ? '종일' : `${res.startTime}${res.endTime ? '~' + res.endTime : ''}`;
+        await tgSend(meta.tgBotToken, chatId, `📅 일정 추가됨\n${res.date} ${timeTxt} · ${res.title}\n(되돌리기: /취소)`);
+      } else if (res.kind === 'todo') {
+        await tgSend(meta.tgBotToken, chatId, `☑️ 할 일 추가됨\n${res.date} · ☐ ${res.title}\n(되돌리기: /취소)`);
+      } else {
+        await tgSend(meta.tgBotToken, chatId, `📝 메모 추가됨\n${res.date} · ${res.title}\n(되돌리기: /취소)`);
+      }
+    }
+  } catch (e) {
+    await tgSend(meta.tgBotToken, chatId, `⚠️ 처리 실패: ${e.message || e}`);
+  }
+  return { ok: true };
+}
+
+export const _test = {
+  parseICS, expandEvents, occurrences, linkCreate, linkClaim,
+  feedTokenCreate, feedTokenGet, buildMemosIcs, buildTasksIcs, buildAllIcs,
+  parseQuickInput, buildEventTimestamps, inboxConfigGet, inboxConfigSet,
+};
